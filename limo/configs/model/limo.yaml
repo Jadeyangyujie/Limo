@@ -20,3 +20,10 @@ scheduler:
 camera_info: "${paths.root_dir}/limo/configs/model/camera_info.yaml"
 
 compile: false
+
+
+
+train_scalar_log_interval: 500
+wandb_num_images: 4
+wandb_train_log_interval: 8000
+wandb_log_worst: true

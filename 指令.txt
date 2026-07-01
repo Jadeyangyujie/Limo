@@ -1,0 +1,33 @@
+cd /dfs/data/yangyujie/BEV_LIMO
+source /dfs/data/yangyujie/BEV_LIMO/.venv/bin/activate
+
+
+export REPO=/dfs/data/yangyujie/BEV_LIMO/LIMO
+export CACHE_DIR=$REPO/cache
+mkdir -p $CACHE_DIR  # 确保缓存目录存在
+
+export HF_HOME=$CACHE_DIR/huggingface
+export TORCH_HOME=$CACHE_DIR/torch
+export MPLCONFIGDIR=$CACHE_DIR/matplotlib
+export PYTHONNOUSERSITE=1
+export HYDRA_FULL_ERROR=1
+export CUDA_VISIBLE_DEVICES=0
+
+# 2. 切换到项目根目录，确保路径正确
+cd $REPO
+
+# 3. 使用 python -m 运行，解决模块导入问题，并确保参数在同一行或正确转义
+nohup python -m limo.src.train \
+    experiment=train_limo_local \
+    dataset.dataset_folder=/dfs/data/limo_dataset \
+    > train.out 2>&1 &
+
+
+  nohup python -m limo.src.train \
+    experiment=train_limo_local \
+    tags='["LIMO","initial","epoch20","resume"]'\
+    dataset.dataset_folder=/dfs/data/limo_dataset \
+    ckpt_path=/dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51/checkpoints/last.ckpt \
+    dataset.num_workers=4 \
+    hydra.run.dir=/dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51_resume \
+    > train.out 2>&1 &

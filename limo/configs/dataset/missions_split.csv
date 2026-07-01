@@ -12,14 +12,11 @@ ID,Short Name,Name,Timestamp,Size (GB),UUID,Split
 11,EIG-1,Jungfraujoch - Eigergletscher Down,2024-11-03-13-51-43,118.8,aa22a692-a29d-4676-98b8-42dd417eeae4,test
 12,EIG-2,Jungfraujoch - Eigergletscher Up,2024-11-03-13-59-54,91.67,a2bb34d5-f963-4a63-bf4a-8ffab2da1589,train
 13,GRI-1,Grindelwald - Village 1,2024-11-04-10-57-34,100.34,34c04ec5-c1b7-4674-9d64-99ade50f71d0,train
-14,CYN-1,Grindelwald - Canyon 1,2024-11-04-12-55-59,119.97,7ffa3399-837f-40b7-8a2f-5760ce136533,train
 15,CYN-2,Grindelwald - Canyon 2,2024-11-04-13-07-13,95.01,58e4d73e-fff1-4209-bf95-6c1ee065b3f3,train
 16,HIL-1,Grindelwald - Burglauenen 1,2024-11-04-16-05-00,120.22,d38b3b33-c450-4bce-bbb8-5f961b6bb17c,train
-18,PIL-1,Pilatus - Hike 1,2024-11-11-12-07-40,210.0,e3a92c6b-1fbb-496a-bdb0-ec754ec8f6f0,train
 19,PIL-2,Pilatus - Hike 2,2024-11-11-12-42-47,106.26,8a90fb38-885e-4b57-ad21-b7e44d3ec8fb,train
 20,ROOT-1,Pilatus - Fraekmuentegg Forest 1,2024-11-11-14-29-44,112.45,f7e8e6c1-828f-43a7-b047-1491217e8fb9,train
 21,HAUS-1,Verkehrshaus - Museum 1,2024-11-11-16-14-23,69.95,10aa8311-2487-4e5c-9136-91b1d9ae4efa,train
-22,HÖB-1,Hoenggerberg - Forest 1,2024-11-14-11-17-02,144.54,1a30c7fd-d833-48ac-8bf5-0d3f3f0ba5a1,train
 23,HÖB-2,Hoenggerberg - Forest 2,2024-11-14-12-01-26,127.54,5e356450-ccb0-4b8c-bd5e-21e5bfdb0d08,train
 24,HEAP-1,Heap Testsight 1,2024-11-14-13-45-37,96.13,512edee1-de86-463f-bdda-f55362e2fda1,val
 25,KÄB-1,Käferberg - Forest 1,2024-11-14-14-36-02,207.89,1b64c4e0-2747-4a4d-b983-2454b5481a69,train
@@ -40,10 +37,8 @@ ID,Short Name,Name,Timestamp,Size (GB),UUID,Split
 40,ARC-6,ARCHE - Panic Smoke 1,2024-11-18-17-13-09,74.5,c38e6cdc-cadb-4f15-bd96-daa89cb46edf,train
 41,ARC-7,ARCHE - Panic Smoke 2,2024-11-18-17-31-36,65.62,529abc82-87fc-4edf-a16f-9061893c5aab,test
 42,LEICA-1,Leica - Reception,2024-11-25-14-57-08,68.37,19e1ac85-eaf9-4d8e-baf0-27dbb215e9f4,train
-43,LEICA-2,Leica - Warehouse,2024-11-25-16-36-19,83.8,fb5f7a04-e95f-4601-a6f2-948ff69f0735,train
 44,SBB-1,SBB - Train Tracks,2024-12-03-13-15-38,125.36,75516885-5b6d-4703-9dcc-766519f9737c,train
 45,SBB-2,SBB - Train Depot,2024-12-03-13-26-40,65.89,6feee8a7-2588-4e7e-9fd4-cf897af71206,train
-46,CON-1,Construction - Corridor 1,2024-12-09-09-34-43,76.61,d3943914-d045-4442-a63c-903cbbbd2be1,train
 47,CON-2,Construction - Corridor 2,2024-12-09-09-41-46,36.02,48a42585-1b42-44df-bf82-883b09706efa,train
 48,CON-3,Construction - Apartment,2024-12-09-11-28-28,82.97,f6d20c92-44af-4697-a6d5-773bddc35fa5,train
 49,CON-4,Construction - Outdoor,2024-12-09-11-53-11,170.57,a531a101-0211-46a2-b13f-605aa4b888ab,test

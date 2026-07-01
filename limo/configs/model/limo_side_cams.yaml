@@ -17,3 +17,10 @@ scheduler:
   div_factor: 100
 
 compile: false
+
+
+
+train_scalar_log_interval: 500
+wandb_num_images: 4
+wandb_train_log_interval: 8000
+wandb_log_worst: true

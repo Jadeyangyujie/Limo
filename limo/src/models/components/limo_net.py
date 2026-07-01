@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torchvision import transforms
 from typing import Tuple
-
+import os
 
 class LimoNet(nn.Module):
     def __init__(
@@ -50,15 +50,43 @@ class LimoNet(nn.Module):
         # build modules
         self.setup()
 
+
+
     def setup(self):
         if self._initialized:
             return
 
+        # 动态获取缓存根目录，默认优先使用 TORCH_HOME，否则回退到 ./cache
+        cache_dir = os.environ.get("TORCH_HOME", os.path.join(os.getcwd(), "cache", "torch"))
+        hub_dir = os.path.join(cache_dir, "hub")
+        
+        # 1. 本地加载模型仓库
+        repo_path = os.path.join(hub_dir, "facebookresearch_dinov2_main")
         self.backbone = torch.hub.load(
-            "facebookresearch/dinov2",
-            "dinov2_vits14",
-            pretrained=self.pretrained,
+            repo_or_dir=repo_path,
+            model="dinov2_vits14",
+            source="local",
+            pretrained=False, # 设置为 False，防止其尝试自动联网下载权重
         )
+
+        # 2. 手动加载权重文件
+        if self.pretrained:
+            checkpoint_path = os.path.join(hub_dir, "checkpoints", "dinov2_vits14_pretrain.pth")
+            if os.path.exists(checkpoint_path):
+                self.backbone.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+            else:
+                raise FileNotFoundError(f"权重文件未找到: {checkpoint_path}")
+
+        # 以下逻辑保持不变
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+        for m in self.backbone.modules():
+            if isinstance(m, nn.LayerNorm):
+                for p in m.parameters():
+                    p.requires_grad = True
+
+        self.embed_dim = self.backbone.embed_dim
+        # ... 后续逻辑保持完全一致 ...
 
         for p in self.backbone.parameters():
             p.requires_grad = False

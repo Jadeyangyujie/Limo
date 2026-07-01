@@ -2,14 +2,23 @@
 
 defaults:
   - override /dataset: limo_local
-  - override /logger: csv
+  - override /logger: wandb
 
-tags: ["local", "limo", "D_aug"]
+tags: ["local", "limo", "D_aug", "initial"]
 
 trainer:
-  max_epochs: 5
+  max_epochs: 20
+
+logger:
+  wandb:
+    tags: ${tags}
 
 dataset:
-  batch_size: 4
+  missions_csv: ${paths.root_dir}/limo/configs/dataset/missions_split.csv
+  dataset_folder: ${paths.data_dir}/dataset_builder
+  batch_size: 32
+  num_workers: 16
+  pin_memory: True
 
+  
 seed: 12345

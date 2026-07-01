@@ -11,3 +11,6 @@ legacy/
 
 *.code-workspace
 *.log
+cache
+
+*.out

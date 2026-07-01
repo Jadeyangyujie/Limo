@@ -212,7 +212,7 @@ def get_dataset(
     if dataset_type in ["geo", "aug"]:
         topics.append("geometric_paths")
 
-    grandtour_folder = dataset_folder / "grandtour"
+    grandtour_folder = dataset_folder 
     grandtour_folder.mkdir(parents=True, exist_ok=True)
     datset_dir = pull_missions_from_hf(list(missions.keys()), topics, grandtour_folder)
 

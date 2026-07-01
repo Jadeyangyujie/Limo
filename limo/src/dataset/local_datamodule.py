@@ -43,7 +43,7 @@ class LocalLimoDataModule(LightningDataModule):
         super().__init__()
         self.save_hyperparameters(logger=False)
 
-        self.dataset_folder = Path(dataset_folder) / "grandtour"
+        self.dataset_folder = Path(dataset_folder) 
         self.missions_csv = Path(missions_csv)
         self.dataset_type = dataset_type
         self.batch_size = batch_size
