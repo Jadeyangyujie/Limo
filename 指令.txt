@@ -31,3 +31,11 @@ nohup python -m limo.src.train \
     dataset.num_workers=4 \
     hydra.run.dir=/dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51_resume \
     > train.out 2>&1 &
+
+
+
+
+---------------------------------------------
+python -m limo.src.train \
+    experiment=train_limo_debug \
+    dataset.dataset_folder=/home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET
