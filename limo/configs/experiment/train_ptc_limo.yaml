@@ -1,0 +1,68 @@
+# @package _global_
+
+defaults:
+  - override /dataset: limo_local
+  - override /logger: wandb
+
+tags: ["ptc", "limo", "aug"]
+
+logger:
+  wandb:
+    tags: ${tags}
+
+trainer:
+  accelerator: gpu
+  devices: 2
+  strategy: ddp
+  precision: 16-mixed
+  max_epochs: 20
+  #  多少个 global_step 记录一次 step 指标
+  log_every_n_steps: 50
+
+dataset:
+  dataset_folder: /dfs/data/limo_dataset
+  missions_csv: ${paths.root_dir}/limo/configs/dataset/missions_split.csv
+  dataset_type: "aug"
+  batch_size: 32
+  num_workers: 8
+  pin_memory: True
+
+
+model:
+  # train_scalar_log_interval: 500
+  # wandb_num_images: 4
+  # wandb_train_log_interval: 8000
+  # wandb_log_worst: true
+  train_scalar_log_interval: 50
+  # 每次上传预测可视化图片张数
+  wandb_num_images: 4
+  # 控制训练阶段多久上传一次 W&B 图片，不控制 loss 曲线
+  wandb_train_log_interval: 100
+  wandb_log_worst: true
+
+
+ptc:
+  enabled: true
+  label_group: ptc_labels
+  risk_key: risk_map
+  valid_key: valid_mask
+  x_min: -4.0
+  x_max: 4.0
+  y_min: -4.0
+  y_max: 4.0
+  resolution: 0.04
+  flip_x_axis: false
+  flip_y_axis: false
+  swap_xy: false
+  lambda_risk: 0.03
+  lambda_oor: 0.01
+  lambda_smooth: 0.002
+  margin: 0.0
+  sampling:
+    coordinate: index_aligned
+    mode: bilinear
+    align_corners: true
+
+
+
+seed: 12345

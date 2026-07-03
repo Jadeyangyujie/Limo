@@ -1,0 +1,15 @@
+ source /dfs/data/yangyujie/limo_env/.venv/bin/activate
+
+
+
+python generate_ptc_labels_from_bev.py \
+  --dataset-root /dfs/data/limo_dataset \
+  --all-missions \
+  --dry-run \
+  --summary-out ./ptc_dry_run_one_mission.json
+
+python generate_ptc_labels_from_bev.py \
+  --dataset-root /dfs/data/limo_dataset \
+  --all-missions \
+  --overwrite \
+  --summary-out ./ptc_dry_run_one_mission.json
