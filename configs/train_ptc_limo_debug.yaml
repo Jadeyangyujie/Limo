@@ -1,0 +1,41 @@
+paths:
+  root_dir: /home/robot-device/yangyujie/PTC_LIMO/LIMO
+  data_dir: /home/robot-device/yangyujie/PTC_LIMO/LIMO/data
+  log_dir: /home/robot-device/yangyujie/PTC_LIMO/LIMO/logs
+
+dataset:
+  _target_: limo.src.dataset.local_datamodule.LocalLimoDataModule
+  dataset_folder: /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET
+  missions_csv: ${paths.root_dir}/limo/configs/dataset/ptc_missions_split_debug.csv
+  dataset_type: "geo"
+  batch_size: 4
+  num_workers: 0
+  pin_memory: false
+  shuffle_train: true
+  shuffle_val: false
+  shuffle_test: false
+  with_side_cams: false
+  image_size: [308, 476]
+  ptc: ${ptc}
+
+ptc:
+  enabled: true
+  label_group: ptc_labels
+  risk_key: risk_map
+  valid_key: valid_mask
+  x_min: -4.0
+  x_max: 4.0
+  y_min: -4.0
+  y_max: 4.0
+  resolution: 0.04
+  flip_x_axis: false
+  flip_y_axis: false
+  swap_xy: false
+  lambda_risk: 0.03
+  lambda_oor: 0.01
+  lambda_smooth: 0.002
+  margin: 0.0
+  sampling:
+    coordinate: index_aligned
+    mode: bilinear
+    align_corners: true

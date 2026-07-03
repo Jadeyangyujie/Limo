@@ -22,3 +22,5 @@ with_side_cams: False
 
 # Image size for transforms (height, width)
 image_size: [308, 476]
+
+ptc: ${ptc}

@@ -30,3 +30,25 @@ ckpt_path: null
 
 # seed for random number generators in pytorch, numpy and python.random
 seed: null
+
+ptc:
+  enabled: false
+  label_group: ptc_labels
+  risk_key: risk_map
+  valid_key: valid_mask
+  x_min: -4.0
+  x_max: 4.0
+  y_min: -4.0
+  y_max: 4.0
+  resolution: 0.04
+  flip_x_axis: false
+  flip_y_axis: false
+  swap_xy: false
+  lambda_risk: 0.03
+  lambda_oor: 0.01
+  lambda_smooth: 0.002
+  margin: 0.0
+  sampling:
+    coordinate: index_aligned
+    mode: bilinear
+    align_corners: true

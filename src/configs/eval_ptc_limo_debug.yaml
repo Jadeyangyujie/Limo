@@ -1,0 +1,24 @@
+command: all
+non_interactive: true
+
+dataset_root: /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET
+missions_csv: /home/robot-device/yangyujie/PTC_LIMO/LIMO/src/configs/ptc_limo_eval_missions_debug.csv
+output_root: /home/robot-device/yangyujie/PTC_LIMO/LIMO/results/open_loop_evaluation
+run_id: ptc-limo-debug-eval
+
+datasets: D_AUG
+methods: ptc_limo
+ptc_limo_weights: /home/robot-device/yangyujie/PTC_LIMO/LIMO/logs/train/runs/2026-07-02_19-17-34/weights/last.safetensors
+ptc_limo_image_subdir: images
+
+device: cuda
+batch_size: 16
+success_distance_m: 1.0
+goal_source: raw_goal
+collision_mode: footprint_any
+
+map_resolution_m: 0.04
+map_origin_xy:
+  - -4.0
+  - -4.0
+elevation_rotate_k: 0

@@ -1,0 +1,23 @@
+command: all
+non_interactive: true
+
+dataset_root: /dfs/data/limo_dataset
+missions_csv: /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/limo/configs/dataset/missions_split.csv
+output_root: /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/results/open_loop_evaluation
+run_id: bev-limo-a-2026-06-26-eval
+
+datasets: D_AUG
+methods: bev_limo_a
+bev_limo_a_weights: /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/logs/train/runs/2026-06-26_05-31-25_resume_resume_resume/weights/last.safetensors
+
+device: cuda
+batch_size: 16
+success_distance_m: 1.0
+goal_source: raw_goal
+collision_mode: footprint_any
+
+map_resolution_m: 0.04
+map_origin_xy:
+  - -4.0
+  - -4.0
+elevation_rotate_k: 0

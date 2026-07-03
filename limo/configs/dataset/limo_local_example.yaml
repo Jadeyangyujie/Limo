@@ -22,3 +22,5 @@ shuffle_test: False
 with_side_cams: False
 
 image_size: [308, 476]
+
+ptc: ${ptc}

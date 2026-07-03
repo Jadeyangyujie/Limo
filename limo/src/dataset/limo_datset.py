@@ -5,8 +5,9 @@ import tarfile
 from collections import defaultdict
 from itertools import product
 from pathlib import Path
-from typing import Literal, Tuple
+from typing import Any, Literal, Tuple
 
+import numpy as np
 import torch
 import zarr
 from huggingface_hub import snapshot_download
@@ -14,9 +15,25 @@ from PIL import Image
 from torch.utils.data import ConcatDataset, Dataset
 from torchvision import transforms
 
+from limo.src.dataset.zarr_v2 import ZarrV2Array
 from limo.src.utils.pylogger import RankedLogger
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+
+def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
+    if cfg is None:
+        return default
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    getter = getattr(cfg, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    return getattr(cfg, key, default)
+
+
+def _ptc_enabled(ptc: Any) -> bool:
+    return bool(_cfg_get(ptc, "enabled", False))
 
 
 def parse_missions_csv(missions_csv: Path) -> dict[str, str]:
@@ -100,12 +117,19 @@ class MissionDataset(Dataset):
         mission_name: str,
         transform: transforms.Compose,
         with_side_cams: bool = False,
+        ptc: Any | None = None,
     ):
         self.dataset_type = dataset_type
         self.dataset_folder = dataset_folder
         self.mission_name = mission_name
         self.transform = transform
         self.with_side_cams = with_side_cams
+        self.ptc = ptc
+        self.ptc_enabled = _ptc_enabled(ptc)
+        self.ptc_missing_count = 0
+        self.ptc_arrays: dict[str, ZarrV2Array] | None = None
+        self.ptc_image_id_to_row: dict[int, int] = {}
+        self.ptc_map_shape = self._default_ptc_map_shape()
 
         mission_dir = dataset_folder / mission_name
         if not mission_dir.exists():
@@ -124,16 +148,111 @@ class MissionDataset(Dataset):
         else:
             raise ValueError(f"Invalid dataset_type: {dataset_type}")
 
+        if self.ptc_enabled:
+            self._init_ptc_labels(mission_dir)
+
     def __len__(self):
         return len(self.z["path"])
 
+    def _default_ptc_map_shape(self) -> tuple[int, int]:
+        x_min = float(_cfg_get(self.ptc, "x_min", -4.0))
+        x_max = float(_cfg_get(self.ptc, "x_max", 4.0))
+        y_min = float(_cfg_get(self.ptc, "y_min", -4.0))
+        y_max = float(_cfg_get(self.ptc, "y_max", 4.0))
+        resolution = float(_cfg_get(self.ptc, "resolution", 0.04))
+        height = max(int(round((x_max - x_min) / resolution)), 1)
+        width = max(int(round((y_max - y_min) / resolution)), 1)
+        return height, width
+
+    def _image_id_at(self, idx: int) -> int:
+        return int(np.asarray(self.z["image_id"][idx]).reshape(-1)[0])
+
+    def _init_ptc_labels(self, mission_dir: Path) -> None:
+        label_group = str(_cfg_get(self.ptc, "label_group", "ptc_labels"))
+        risk_key = str(_cfg_get(self.ptc, "risk_key", "risk_map"))
+        valid_key = str(_cfg_get(self.ptc, "valid_key", "valid_mask"))
+        ptc_dir = mission_dir / label_group
+
+        required_paths = {
+            "image_id": ptc_dir / "image_id",
+            "risk_map": ptc_dir / risk_key,
+            "valid_mask": ptc_dir / valid_key,
+        }
+        missing = [name for name, path in required_paths.items() if not (path / ".zarray").exists()]
+        if missing:
+            log.warning(
+                f"PTC labels enabled but mission '{self.mission_name}' is missing "
+                f"{missing} under {ptc_dir}. Returning zero risk/valid maps."
+            )
+            return
+
+        image_id_arr = ZarrV2Array(required_paths["image_id"])
+        risk_arr = ZarrV2Array(required_paths["risk_map"])
+        valid_arr = ZarrV2Array(required_paths["valid_mask"])
+
+        if len(risk_arr.shape) != 3 or len(valid_arr.shape) != 3:
+            log.warning(
+                f"PTC labels for mission '{self.mission_name}' must be [N,H,W], "
+                f"got risk={risk_arr.shape}, valid={valid_arr.shape}. Returning zeros."
+            )
+            return
+        if risk_arr.shape != valid_arr.shape:
+            log.warning(
+                f"PTC risk/valid shape mismatch for mission '{self.mission_name}': "
+                f"risk={risk_arr.shape}, valid={valid_arr.shape}. Returning zeros."
+            )
+            return
+
+        ptc_ids = np.asarray(image_id_arr[:], dtype=np.int64).reshape(-1)
+        self.ptc_image_id_to_row = {
+            int(image_id): int(row) for row, image_id in enumerate(ptc_ids)
+        }
+        self.ptc_arrays = {
+            "risk_map": risk_arr,
+            "valid_mask": valid_arr,
+        }
+        self.ptc_map_shape = (int(risk_arr.shape[1]), int(risk_arr.shape[2]))
+        log.info(
+            f"Loaded PTC labels for mission '{self.mission_name}' from {ptc_dir}: "
+            f"{len(self.ptc_image_id_to_row)} image ids, map shape={self.ptc_map_shape}"
+        )
+
+    def _zero_ptc_label(self) -> dict[str, torch.Tensor]:
+        height, width = self.ptc_map_shape
+        return {
+            "risk_map": torch.zeros((1, height, width), dtype=torch.float32),
+            "valid_mask": torch.zeros((1, height, width), dtype=torch.float32),
+        }
+
+    def _load_ptc_label(self, image_id: int) -> dict[str, torch.Tensor]:
+        if self.ptc_arrays is None:
+            return self._zero_ptc_label()
+
+        row = self.ptc_image_id_to_row.get(int(image_id))
+        if row is None:
+            self.ptc_missing_count += 1
+            if self.ptc_missing_count <= 5:
+                log.warning(
+                    f"PTC label missing for mission='{self.mission_name}', "
+                    f"image_id={image_id}. Returning zero risk/valid maps."
+                )
+            return self._zero_ptc_label()
+
+        risk = np.asarray(self.ptc_arrays["risk_map"][row])[0].astype(np.float32)
+        valid = np.asarray(self.ptc_arrays["valid_mask"][row])[0].astype(np.float32)
+        return {
+            "risk_map": torch.from_numpy(risk[None]),
+            "valid_mask": torch.from_numpy(valid[None]),
+        }
+
     def load_image(self, topic: str, idx: int) -> Image.Image:
+        image_id = self._image_id_at(idx)
         image_path = (
             self.dataset_folder
             / self.mission_name
             / "images"
             / topic
-            / f"{self.z['image_id'][idx]:06d}.jpeg"
+            / f"{image_id:06d}.jpeg"
         )
         if not image_path.exists():
             log.error(f"Image not found at {image_path}")
@@ -146,12 +265,17 @@ class MissionDataset(Dataset):
 
         goal = torch.tensor(self.z["goal"][idx], dtype=torch.float32)
         path = torch.tensor(self.z["path"][idx], dtype=torch.float32)
+        image_id = self._image_id_at(idx)
 
         batch = {
             "image_front": image_front,
             "goal": goal,
             "path": path,
+            "image_id": torch.tensor(image_id, dtype=torch.long),
         }
+
+        if self.ptc_enabled:
+            batch.update(self._load_ptc_label(image_id))
 
         if self.with_side_cams:
             image_left = self.load_image("hdr_left", idx)
@@ -171,18 +295,19 @@ def get_mission_dataset(
     mission_name: str,
     transform: transforms.Compose,
     with_side_cams: bool = False,
+    ptc: Any | None = None,
 ) -> Dataset:
     if dataset_type == "aug":
         geo_ds = MissionDataset(
-            "geo", dataset_folder, mission_name, transform, with_side_cams
+            "geo", dataset_folder, mission_name, transform, with_side_cams, ptc
         )
         tel_ds = MissionDataset(
-            "tel", dataset_folder, mission_name, transform, with_side_cams
+            "tel", dataset_folder, mission_name, transform, with_side_cams, ptc
         )
         return ConcatDataset([geo_ds, tel_ds])
     if dataset_type in ["tel", "geo"]:
         return MissionDataset(
-            dataset_type, dataset_folder, mission_name, transform, with_side_cams
+            dataset_type, dataset_folder, mission_name, transform, with_side_cams, ptc
         )
     else:
         raise ValueError(f"Invalid dataset_type: {dataset_type}")
@@ -194,6 +319,7 @@ def get_dataset(
     missions_csv: Path,
     with_side_cams: bool = False,
     image_size: Tuple[int, int] = (308, 476),
+    ptc: Any | None = None,
 ):
     missions = parse_missions_csv(missions_csv)
 
@@ -211,6 +337,8 @@ def get_dataset(
         topics.append("teleop_paths")
     if dataset_type in ["geo", "aug"]:
         topics.append("geometric_paths")
+    if _ptc_enabled(ptc):
+        topics.append(str(_cfg_get(ptc, "label_group", "ptc_labels")))
 
     grandtour_folder = dataset_folder 
     grandtour_folder.mkdir(parents=True, exist_ok=True)
@@ -220,7 +348,7 @@ def get_dataset(
     for mission, split in missions.items():
         datasets[split].append(
             get_mission_dataset(
-                dataset_type, datset_dir, mission, transform, with_side_cams
+                dataset_type, datset_dir, mission, transform, with_side_cams, ptc
             )
         )
 

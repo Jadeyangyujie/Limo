@@ -23,6 +23,11 @@ from typing import Any
 import numcodecs
 import numpy as np
 
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm is optional
+    tqdm = None
+
 import re
 MISSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}")
 
@@ -51,6 +56,67 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def chunk_count(num_items: int, chunk_size: int) -> int:
+    if num_items <= 0:
+        return 0
+    return (num_items + chunk_size - 1) // chunk_size
+
+
+def simple_progress_iter(
+    iterable: Any,
+    *,
+    total: int | None,
+    desc: str,
+    unit: str,
+    leave: bool = True,
+) -> Any:
+    """Tiny fallback progress bar used only when tqdm is unavailable."""
+    if total is None or total <= 0:
+        for item in iterable:
+            yield item
+        return
+
+    width = 28
+    for idx, item in enumerate(iterable, start=1):
+        filled = int(width * idx / total)
+        bar = "#" * filled + "-" * (width - filled)
+        print(f"\r{desc}: [{bar}] {idx}/{total} {unit}", end="", file=sys.stderr)
+        yield item
+    if leave:
+        print(file=sys.stderr)
+    else:
+        print("\r" + " " * (len(desc) + width + 32) + "\r", end="", file=sys.stderr)
+
+
+def progress_iter(
+    iterable: Any,
+    *,
+    total: int | None = None,
+    desc: str = "",
+    unit: str = "it",
+    leave: bool = True,
+    disable: bool = False,
+) -> Any:
+    if disable:
+        return iterable
+    if tqdm is not None:
+        return tqdm(
+            iterable,
+            total=total,
+            desc=desc,
+            unit=unit,
+            leave=leave,
+            dynamic_ncols=True,
+        )
+    return simple_progress_iter(
+        iterable,
+        total=total,
+        desc=desc,
+        unit=unit,
+        leave=leave,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate PTC-LIMO labels from bev_labels_from_elevation."
@@ -75,6 +141,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-images", type=positive_int)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable terminal progress bars.",
+    )
     parser.add_argument("--summary-out", default=DEFAULT_SUMMARY_OUT, type=Path)
     return parser.parse_args()
 
@@ -668,6 +739,9 @@ def estimate_global_robust_range(
     chunk_images: int,
     risk_source: str,
     warnings: WarningCollector,
+    *,
+    desc: str = "estimating global robust range",
+    disable_progress: bool = False,
 ) -> tuple[float, float] | None:
     risk_arr = require_array(source, risk_source)
     raw_arr = require_array(source, "limo_raw_risk")
@@ -675,7 +749,15 @@ def estimate_global_robust_range(
     occupancy_arr = get_array(source, "occupancy")
     stats = SampledStats()
 
-    for start in range(0, num_frames, chunk_images):
+    chunk_starts = range(0, num_frames, chunk_images)
+    for start in progress_iter(
+        chunk_starts,
+        total=chunk_count(num_frames, chunk_images),
+        desc=desc,
+        unit="chunk",
+        leave=False,
+        disable=disable_progress,
+    ):
         end = min(start + chunk_images, num_frames)
         risk_chunk = np.asarray(risk_arr[start:end], dtype=np.float32)
         raw_chunk = np.asarray(raw_arr[start:end], dtype=np.float32)
@@ -983,7 +1065,13 @@ def process_mission(args: argparse.Namespace, mission: str) -> dict[str, Any]:
     global_range: tuple[float, float] | None = None
     if args.normalization == "global_robust":
         global_range = estimate_global_robust_range(
-            source, num_frames, args.chunk_images, args.risk_source, warnings
+            source,
+            num_frames,
+            args.chunk_images,
+            args.risk_source,
+            warnings,
+            desc=f"{mission} global_robust",
+            disable_progress=args.no_progress,
         )
 
     output = None
@@ -1000,7 +1088,15 @@ def process_mission(args: argparse.Namespace, mission: str) -> dict[str, Any]:
     raw_out_of_range_count = 0
     raw_finite_count = 0
 
-    for start in range(0, num_frames, args.chunk_images):
+    chunk_starts = range(0, num_frames, args.chunk_images)
+    for start in progress_iter(
+        chunk_starts,
+        total=chunk_count(num_frames, args.chunk_images),
+        desc=f"{mission} ptc_labels",
+        unit="chunk",
+        leave=False,
+        disable=args.no_progress,
+    ):
         end = min(start + args.chunk_images, num_frames)
         count = end - start
         raw_chunk = np.asarray(raw_arr[start:end], dtype=np.float32)
@@ -1247,7 +1343,15 @@ def main() -> int:
     missions = discover_missions(args.dataset_root) if args.all_missions else [args.mission]
     mission_summaries: list[dict[str, Any]] = []
 
-    for mission in missions:
+    mission_iter = progress_iter(
+        missions,
+        total=len(missions),
+        desc="missions",
+        unit="mission",
+        leave=True,
+        disable=args.no_progress or len(missions) <= 1,
+    )
+    for mission in mission_iter:
         try:
             mission_summaries.append(process_mission(args, mission))
         except FileNotFoundError as exc:

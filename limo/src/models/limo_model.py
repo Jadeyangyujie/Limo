@@ -9,6 +9,7 @@ from lightning import LightningModule
 from torchmetrics import MeanMetric, MinMetric
 from torchmetrics.regression import MeanAbsoluteError
 
+from limo.training.trajectory_cost import trajectory_cost_regularization_from_config
 from limo.src.utils.visualization import create_combined_visualization
 
 
@@ -25,12 +26,14 @@ class LimoModel(LightningModule):
         wandb_num_images: int = 4,
         wandb_train_log_interval: int = 500,
         wandb_log_worst: bool = True,
+        ptc: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
 
         self.net = net
         self.loss = loss
+        self.ptc_cfg = ptc
 
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
@@ -69,11 +72,57 @@ class LimoModel(LightningModule):
 
     def model_step(
         self, batch: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         path = batch["path"]
         preds = self(batch)
-        loss = self.loss(preds, path)
-        return loss, preds, path
+        path_loss = self.loss(preds, path)
+        loss = path_loss
+        ptc_logs: Dict[str, torch.Tensor] = {"path_loss": path_loss.detach()}
+
+        if self._ptc_enabled() and "risk_map" in batch and "valid_mask" in batch:
+            ptc_loss, extra_ptc_logs = trajectory_cost_regularization_from_config(
+                pred_path=preds,
+                gt_path=path,
+                risk_map=batch["risk_map"].float(),
+                valid_mask=batch["valid_mask"].float(),
+                config=self.ptc_cfg,
+            )
+            loss = loss + ptc_loss
+            ptc_logs.update(extra_ptc_logs)
+            ptc_logs["ptc/loss"] = ptc_loss.detach()
+
+        return loss, preds, path, ptc_logs
+
+    @staticmethod
+    def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
+        if cfg is None:
+            return default
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+        getter = getattr(cfg, "get", None)
+        if callable(getter):
+            return getter(key, default)
+        return getattr(cfg, key, default)
+
+    def _ptc_enabled(self) -> bool:
+        return bool(self._cfg_get(self.ptc_cfg, "enabled", False))
+
+    def _log_ptc_metrics(
+        self,
+        ptc_logs: Dict[str, torch.Tensor],
+        split: str,
+        on_step: bool = False,
+        name_suffix: str = "",
+    ) -> None:
+        for key, value in ptc_logs.items():
+            metric_name = f"{split}/{key.replace('ptc/', 'ptc_')}{name_suffix}"
+            self.log(
+                metric_name,
+                value,
+                on_step=on_step,
+                on_epoch=not on_step,
+                prog_bar=False,
+            )
 
     @staticmethod
     def _wrap_angle(angle: torch.Tensor) -> torch.Tensor:
@@ -137,7 +186,7 @@ class LimoModel(LightningModule):
     def training_step(
         self, batch: Dict[str, torch.Tensor], batch_idx: int
     ) -> Dict[str, torch.Tensor]:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, ptc_logs = self.model_step(batch)
 
         self.train_loss(loss)
         self.train_mae(preds, targets)
@@ -191,6 +240,7 @@ class LimoModel(LightningModule):
             on_epoch=True,
             prog_bar=False,
         )
+        self._log_ptc_metrics(ptc_logs, split="train")
 
         # --------------------------------------------------
         # 2. step-level metrics
@@ -254,13 +304,20 @@ class LimoModel(LightningModule):
                     prog_bar=False,
                 )
 
+            self._log_ptc_metrics(
+                ptc_logs,
+                split="train",
+                on_step=True,
+                name_suffix="_step",
+            )
+
         # 保持原始逻辑：preds 不 detach
         return {"loss": loss, "preds": preds}
 
     def validation_step(
         self, batch: Dict[str, torch.Tensor], batch_idx: int
     ) -> Dict[str, torch.Tensor]:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, ptc_logs = self.model_step(batch)
 
         self.val_loss(loss)
         self.val_mae(preds, targets)
@@ -299,6 +356,7 @@ class LimoModel(LightningModule):
             on_epoch=True,
             prog_bar=False,
         )
+        self._log_ptc_metrics(ptc_logs, split="val")
 
         # 保持原始逻辑：loss 和 preds 不 detach
         return {"loss": loss, "preds": preds}
@@ -365,7 +423,7 @@ class LimoModel(LightningModule):
         )
 
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, ptc_logs = self.model_step(batch)
 
         self.test_loss(loss)
         self.test_mae(preds, targets)
@@ -409,6 +467,7 @@ class LimoModel(LightningModule):
             on_epoch=True,
             prog_bar=False,
         )
+        self._log_ptc_metrics(ptc_logs, split="test")
 
     def setup(self, stage: str) -> None:
         self.net.setup()

@@ -1,0 +1,133 @@
+export REPO=/dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary
+export EVAL_PY=/dfs/data/yangyujie/limo_env_builder/.venv/bin/python
+
+cd "$REPO"
+
+export CACHE_DIR=$REPO/cache
+mkdir -p "$CACHE_DIR/huggingface" "$CACHE_DIR/torch" "$CACHE_DIR/matplotlib"
+
+export HF_HOME=$CACHE_DIR/huggingface
+export TORCH_HOME=$CACHE_DIR/torch
+export MPLCONFIGDIR=$CACHE_DIR/matplotlib
+export PYTHONNOUSERSITE=1
+export HYDRA_FULL_ERROR=1
+export CUDA_VISIBLE_DEVICES=0
+
+
+
+  1. 先 prepare 一次
+
+  如果 D_TEL_EVAL / D_GEO_EVAL 还是 0，要先跑：
+
+  cd /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary
+
+  nohup env -u LIMO_DISABLE_FASTGEODIS PYTHONPATH=$PWD:$PWD/src PYTHONDONTWRITEBYTECODE=1 \
+  python src/run_open_loop_evaluation.py prepare \
+    --dataset-root /dfs/data/limo_dataset \
+    --missions-csv /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/limo/configs/dataset/missions_split.csv \
+    --output-root /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/results/open_loop_evaluation \
+    --run-id prepare_eval_sets \
+    --non-interactive \
+    --device cuda \
+    > prepare_eval_sets.out 2>&1 &
+
+ 看日志：
+
+  tail -f prepare_eval_sets.out
+
+  2. 跑 BEV-LIMO-A 测评
+
+  cd /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary
+
+  nohup env PYTHONPATH=$PWD:$PWD/src PYTHONDONTWRITEBYTECODE=1 \
+  python src/run_open_loop_evaluation.py evaluate \
+    --dataset-root /dfs/data/limo_dataset \
+    --missions-csv /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/limo/configs/dataset/missions_split.csv \
+    --output-root /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/results/open_loop_evaluation \
+    --run-id eval_bev_limo_a \
+    --non-interactive \
+    --datasets D_AUG \
+    --methods bev_limo_a \
+    --bev-limo-a-weights /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/logs/train/runs/2026-06-26_05-31-25_resume_resume_resume/weights/last.safetensors \
+    --device cuda \
+    --batch-size 16 \
+    > eval_bev_limo_a.out 2>&1 &
+
+  3. 跑原始 LIMO 测评
+
+  如果你的原始 LIMO 是自己用当前 repo 训练的，图像目录一般用 images：
+
+  cd /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary
+
+source /dfs/data/yangyujie/limo_env_builder/.venv/bin/activate
+
+  nohup env PYTHONPATH=$PWD:$PWD/src PYTHONDONTWRITEBYTECODE=1 \
+  python src/run_open_loop_evaluation.py evaluate \
+    --dataset-root /dfs/data/limo_dataset \
+    --missions-csv /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/limo/configs/dataset/missions_split.csv \
+    --output-root /dfs/data/yangyujie/BEV_LIMO/BEV_LIMO_A_auxiliary/results/open_loop_evaluation \
+    --run-id eval_original_limo \
+    --non-interactive \
+    --datasets D_AUG \
+    --methods limo_D_aug \
+    --limo-d-aug-weights /dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51_resume/weights/last.safetensors \
+    --limo-image-subdir images \
+    --device cuda \
+    --batch-size 16 \
+    > eval_original_limo_d_aug.out 2>&1 &
+
+
+
+
+
+
+
+nohup env PYTHONPATH=$PWD/src:$PWD \
+$EVAL_PY src/run_open_loop_evaluation.py \
+  --config-yaml src/configs/eval_bev_limo_a_server.yaml \
+  > eval_bev_limo_a_a100.out 2>&1 &
+
+
+
+
+
+
+
+
+
+
+
+---------------------------------------
+
+
+
+  首次 smoke test
+  第一次会准备 eval zarr groups；--max-samples 只限制评测样本数，不限制 prepare。
+
+  conda run -n limo python src/run_open_loop_evaluation.py all \
+    --config-yaml src/configs/eval_ptc_limo_debug.yaml \
+    --run-id ptc-limo-smoke \
+    --device cpu \
+    --batch-size 1 \
+    --max-samples 8
+
+  已有 eval groups 后跑正式评测
+  有 GPU 时用：
+
+  conda run -n limo python src/run_open_loop_evaluation.py evaluate \
+    --config-yaml src/configs/eval_ptc_limo_debug.yaml \
+    --run-id ptc-limo-eval \
+    --device cuda \
+    --batch-size 16
+
+  无 GPU 时改成：
+
+  conda run -n limo python src/run_open_loop_evaluation.py evaluate \
+    --config-yaml src/configs/eval_ptc_limo_debug.yaml \
+    --run-id ptc-limo-eval-cpu \
+    --device cpu \
+    --batch-size 1
+
+  结果会写到：
+
+  /home/robot-device/yangyujie/PTC_LIMO/LIMO/results/open_loop_evaluation/<run-id>/

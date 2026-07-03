@@ -25,6 +25,7 @@ class LimoDataModule(LightningDataModule):
         shuffle_test: bool = False,
         with_side_cams: bool = False,
         image_size: Tuple[int, int] = (308, 476),
+        ptc: Dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -40,6 +41,7 @@ class LimoDataModule(LightningDataModule):
         self.shuffle_test = shuffle_test
         self.with_side_cams = with_side_cams
         self.image_size = image_size
+        self.ptc = ptc
 
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
@@ -56,6 +58,7 @@ class LimoDataModule(LightningDataModule):
                 missions_csv=self.missions_csv,
                 with_side_cams=self.with_side_cams,
                 image_size=self.image_size,
+                ptc=self.ptc,
             )
 
             self.data_train = splits.get("train")
