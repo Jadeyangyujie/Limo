@@ -79,7 +79,20 @@ class LimoModel(LightningModule):
         loss = path_loss
         ptc_logs: Dict[str, torch.Tensor] = {"path_loss": path_loss.detach()}
 
-        if self._ptc_enabled() and "risk_map" in batch and "valid_mask" in batch:
+        if self._ptc_enabled():
+            if "risk_map" not in batch or "valid_mask" not in batch:
+                raise RuntimeError(
+                    "ptc.enabled=true but batch is missing risk_map/valid_mask. "
+                    "Check dataset ptc config and label availability."
+                )
+            if "ptc_missing_label" in batch:
+                ptc_logs["ptc/missing_label_ratio"] = (
+                    batch["ptc_missing_label"].float().mean().detach()
+                )
+            if "ptc_empty_valid_mask" in batch:
+                ptc_logs["ptc/empty_valid_ratio"] = (
+                    batch["ptc_empty_valid_mask"].float().mean().detach()
+                )
             ptc_loss, extra_ptc_logs = trajectory_cost_regularization_from_config(
                 pred_path=preds,
                 gt_path=path,

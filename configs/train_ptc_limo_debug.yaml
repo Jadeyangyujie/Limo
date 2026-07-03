@@ -23,6 +23,9 @@ ptc:
   label_group: ptc_labels
   risk_key: risk_map
   valid_key: valid_mask
+  allow_missing_labels: false
+  validate_metadata: true
+  allow_metadata_mismatch: false
   x_min: -4.0
   x_max: 4.0
   y_min: -4.0
@@ -33,9 +36,13 @@ ptc:
   swap_xy: false
   lambda_risk: 0.03
   lambda_oor: 0.01
+  lambda_invalid: 0.005
   lambda_smooth: 0.002
-  margin: 0.0
+  oor_mode: relative
+  # Positive safety_margin means pred must be safer than gt by this amount.
+  safety_margin: 0.0
+  valid_margin: 0.0
   sampling:
-    coordinate: index_aligned
+    coordinate: cell_center
     mode: bilinear
     align_corners: true

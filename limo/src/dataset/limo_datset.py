@@ -1,4 +1,6 @@
 import csv
+import json
+import math
 import re
 import shutil
 import tarfile
@@ -34,6 +36,10 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
 
 def _ptc_enabled(ptc: Any) -> bool:
     return bool(_cfg_get(ptc, "enabled", False))
+
+
+def _close_float(a: float, b: float, atol: float = 1e-6) -> bool:
+    return math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=atol)
 
 
 def parse_missions_csv(missions_csv: Path) -> dict[str, str]:
@@ -126,7 +132,13 @@ class MissionDataset(Dataset):
         self.with_side_cams = with_side_cams
         self.ptc = ptc
         self.ptc_enabled = _ptc_enabled(ptc)
-        self.ptc_missing_count = 0
+        self.ptc_allow_missing = bool(_cfg_get(ptc, "allow_missing_labels", False))
+        self.ptc_validate_metadata = bool(_cfg_get(ptc, "validate_metadata", True))
+        self.ptc_allow_metadata_mismatch = bool(
+            _cfg_get(ptc, "allow_metadata_mismatch", False)
+        )
+        self.missing_ptc_label_count = 0
+        self.empty_valid_mask_count = 0
         self.ptc_arrays: dict[str, ZarrV2Array] | None = None
         self.ptc_image_id_to_row: dict[int, int] = {}
         self.ptc_map_shape = self._default_ptc_map_shape()
@@ -180,10 +192,13 @@ class MissionDataset(Dataset):
         }
         missing = [name for name, path in required_paths.items() if not (path / ".zarray").exists()]
         if missing:
-            log.warning(
+            message = (
                 f"PTC labels enabled but mission '{self.mission_name}' is missing "
-                f"{missing} under {ptc_dir}. Returning zero risk/valid maps."
+                f"{missing} under {ptc_dir}."
             )
+            if not self.ptc_allow_missing:
+                raise RuntimeError(message)
+            log.warning(f"{message} Returning zero risk/valid maps.")
             return
 
         image_id_arr = ZarrV2Array(required_paths["image_id"])
@@ -191,17 +206,25 @@ class MissionDataset(Dataset):
         valid_arr = ZarrV2Array(required_paths["valid_mask"])
 
         if len(risk_arr.shape) != 3 or len(valid_arr.shape) != 3:
-            log.warning(
+            message = (
                 f"PTC labels for mission '{self.mission_name}' must be [N,H,W], "
-                f"got risk={risk_arr.shape}, valid={valid_arr.shape}. Returning zeros."
+                f"got risk={risk_arr.shape}, valid={valid_arr.shape}."
             )
+            if not self.ptc_allow_missing:
+                raise RuntimeError(message)
+            log.warning(f"{message} Returning zeros.")
             return
         if risk_arr.shape != valid_arr.shape:
-            log.warning(
+            message = (
                 f"PTC risk/valid shape mismatch for mission '{self.mission_name}': "
-                f"risk={risk_arr.shape}, valid={valid_arr.shape}. Returning zeros."
+                f"risk={risk_arr.shape}, valid={valid_arr.shape}."
             )
+            if not self.ptc_allow_missing:
+                raise RuntimeError(message)
+            log.warning(f"{message} Returning zeros.")
             return
+
+        self._validate_ptc_metadata(ptc_dir, risk_arr.shape, valid_arr.shape)
 
         ptc_ids = np.asarray(image_id_arr[:], dtype=np.int64).reshape(-1)
         self.ptc_image_id_to_row = {
@@ -217,32 +240,145 @@ class MissionDataset(Dataset):
             f"{len(self.ptc_image_id_to_row)} image ids, map shape={self.ptc_map_shape}"
         )
 
-    def _zero_ptc_label(self) -> dict[str, torch.Tensor]:
+    def _metadata_problem(self, message: str) -> None:
+        if self.ptc_allow_metadata_mismatch:
+            log.warning(message)
+            return
+        raise RuntimeError(message)
+
+    def _metadata_warning(self, message: str) -> None:
+        log.warning(message)
+
+    def _read_ptc_attrs(self, ptc_dir: Path) -> dict[str, Any]:
+        attrs_path = ptc_dir / ".zattrs"
+        if not attrs_path.exists():
+            self._metadata_warning(
+                f"PTC metadata missing for mission '{self.mission_name}': {attrs_path}"
+            )
+            return {}
+        try:
+            with attrs_path.open("r", encoding="utf-8") as f:
+                attrs = json.load(f)
+        except Exception as exc:
+            self._metadata_problem(
+                f"Failed to read PTC metadata for mission '{self.mission_name}': {exc}"
+            )
+            return {}
+        if not isinstance(attrs, dict):
+            self._metadata_problem(
+                f"PTC metadata for mission '{self.mission_name}' must be a JSON object"
+            )
+            return {}
+        return attrs
+
+    def _validate_ptc_metadata(
+        self,
+        ptc_dir: Path,
+        risk_shape: tuple[int, ...],
+        valid_shape: tuple[int, ...],
+    ) -> None:
+        height, width = int(risk_shape[1]), int(risk_shape[2])
+        x_min = float(_cfg_get(self.ptc, "x_min", -4.0))
+        x_max = float(_cfg_get(self.ptc, "x_max", 4.0))
+        y_min = float(_cfg_get(self.ptc, "y_min", -4.0))
+        y_max = float(_cfg_get(self.ptc, "y_max", 4.0))
+        resolution = float(_cfg_get(self.ptc, "resolution", 0.04))
+        expected_x_max = x_min + height * resolution
+        expected_y_max = y_min + width * resolution
+
+        if not _close_float(x_max, expected_x_max):
+            self._metadata_problem(
+                f"PTC config x_max mismatch for mission '{self.mission_name}': "
+                f"x_max={x_max}, expected x_min + H * resolution = {expected_x_max}"
+            )
+        if not _close_float(y_max, expected_y_max):
+            self._metadata_problem(
+                f"PTC config y_max mismatch for mission '{self.mission_name}': "
+                f"y_max={y_max}, expected y_min + W * resolution = {expected_y_max}"
+            )
+
+        if not self.ptc_validate_metadata:
+            return
+
+        attrs = self._read_ptc_attrs(ptc_dir)
+        if not attrs:
+            return
+
+        checks: list[tuple[str, float, float]] = []
+        for key, expected in (
+            ("H", height),
+            ("W", width),
+            ("roi_x_min", x_min),
+            ("roi_x_max", x_max),
+            ("roi_y_min", y_min),
+            ("roi_y_max", y_max),
+        ):
+            if key not in attrs:
+                self._metadata_warning(
+                    f"PTC metadata for mission '{self.mission_name}' is missing '{key}'"
+                )
+                continue
+            checks.append((key, float(attrs[key]), float(expected)))
+
+        if "resolution" not in attrs:
+            self._metadata_warning(
+                f"PTC metadata for mission '{self.mission_name}' is missing 'resolution'"
+            )
+        else:
+            checks.append(("resolution", float(attrs["resolution"]), resolution))
+
+        for key, actual, expected in checks:
+            if not _close_float(actual, expected):
+                self._metadata_problem(
+                    f"PTC metadata mismatch for mission '{self.mission_name}', {key}: "
+                    f"metadata={actual}, config/shape={expected}"
+                )
+
+    def _zero_ptc_label(self, missing: bool = False) -> dict[str, torch.Tensor]:
         height, width = self.ptc_map_shape
+        if missing:
+            self.missing_ptc_label_count += 1
+        self.empty_valid_mask_count += 1
         return {
             "risk_map": torch.zeros((1, height, width), dtype=torch.float32),
             "valid_mask": torch.zeros((1, height, width), dtype=torch.float32),
+            "ptc_missing_label": torch.tensor(float(missing), dtype=torch.float32),
+            "ptc_empty_valid_mask": torch.tensor(1.0, dtype=torch.float32),
         }
 
     def _load_ptc_label(self, image_id: int) -> dict[str, torch.Tensor]:
         if self.ptc_arrays is None:
-            return self._zero_ptc_label()
+            if not self.ptc_allow_missing:
+                raise RuntimeError(
+                    f"PTC labels are unavailable for mission='{self.mission_name}', "
+                    f"image_id={image_id}, and allow_missing_labels=false"
+                )
+            return self._zero_ptc_label(missing=True)
 
         row = self.ptc_image_id_to_row.get(int(image_id))
         if row is None:
-            self.ptc_missing_count += 1
-            if self.ptc_missing_count <= 5:
+            if not self.ptc_allow_missing:
+                raise RuntimeError(
+                    f"PTC label missing for mission='{self.mission_name}', "
+                    f"image_id={image_id}, and allow_missing_labels=false"
+                )
+            if self.missing_ptc_label_count < 5:
                 log.warning(
                     f"PTC label missing for mission='{self.mission_name}', "
                     f"image_id={image_id}. Returning zero risk/valid maps."
                 )
-            return self._zero_ptc_label()
+            return self._zero_ptc_label(missing=True)
 
         risk = np.asarray(self.ptc_arrays["risk_map"][row])[0].astype(np.float32)
         valid = np.asarray(self.ptc_arrays["valid_mask"][row])[0].astype(np.float32)
+        empty_valid = float(np.count_nonzero(valid) == 0)
+        if empty_valid:
+            self.empty_valid_mask_count += 1
         return {
             "risk_map": torch.from_numpy(risk[None]),
             "valid_mask": torch.from_numpy(valid[None]),
+            "ptc_missing_label": torch.tensor(0.0, dtype=torch.float32),
+            "ptc_empty_valid_mask": torch.tensor(empty_valid, dtype=torch.float32),
         }
 
     def load_image(self, topic: str, idx: int) -> Image.Image:
