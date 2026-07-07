@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - override /dataset: limo_local
+  - override /logger: wandb
+
+tags: ["local", "limo", "D_aug", "initial"]
+
+logger:
+  wandb:
+    tags: ${tags}
+
+dataset:
+  missions_csv: ${paths.root_dir}/limo/configs/dataset/missions_split.csv
+  dataset_folder: /dfs/data/limo_dataset
+  batch_size: 32
+  num_workers: 16
+  pin_memory: True
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  max_epochs: 20
+  check_val_every_n_epoch: 1
+
+model:
+  train_scalar_log_interval: 500
+  wandb_num_images: 4
+  wandb_train_log_interval: 8000
+  wandb_log_worst: true
+  
+seed: 12345
