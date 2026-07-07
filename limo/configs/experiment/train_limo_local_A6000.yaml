@@ -1,15 +1,24 @@
 # @package _global_
 
 defaults:
-  - override /dataset: limo_local_example
+  - override /dataset: limo_local_A6000
   - override /logger: csv
 
-tags: ["local", "limo", "D_aug", "example"]
-
-trainer:
-  max_epochs: 5
+tags: ["local", "limo", "D_aug", "A6000"]
 
 dataset:
   batch_size: 4
+
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  max_epochs: 5
+  check_val_every_n_epoch: 1
+  limit_train_batches: 0.05
+  limit_val_batches: 0.05
+  limit_test_batches: 0.05
+
 
 seed: 12345

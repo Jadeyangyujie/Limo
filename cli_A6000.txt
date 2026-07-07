@@ -1,0 +1,6 @@
+conda activate limo
+
+export PYTHONNOUSERSITE=1 
+export HYDRA_FULL_ERROR=1
+
+python -m limo.src.train experiment=train_limo_local_A6000

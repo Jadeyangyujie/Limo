@@ -117,6 +117,16 @@ class LocalLimoDataModule(LightningDataModule):
         self.data_val = ConcatDataset(splits["val"]) if splits.get("val") else None
         self.data_test = ConcatDataset(splits["test"]) if splits.get("test") else None
 
+        if stage in (None, "fit") and self.data_train is None:
+            raise FileNotFoundError(
+                "No training samples were loaded. "
+                f"dataset_folder={self.dataset_folder}, "
+                f"missions_csv={self.missions_csv}, "
+                f"dataset_type={self.dataset_type}. "
+                "Check that the CSV has at least one train split and that each train mission "
+                "exists under dataset_folder with data/teleop_paths and/or data/geometric_paths."
+            )
+
         for split_name, ds in [
             ("train", self.data_train),
             ("val", self.data_val),
