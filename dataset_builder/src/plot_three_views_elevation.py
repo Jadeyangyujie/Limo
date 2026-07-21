@@ -124,7 +124,7 @@ def plot_three_views_elevation(
     ax = fig.add_subplot(grid[1, 0])
     extent = (-map_size, map_size, -map_size, map_size)
     image = ax.imshow(
-        masked_elevation,
+        np.fliplr(masked_elevation),
         origin="lower",
         extent=extent,
         cmap=cmap,
@@ -153,8 +153,8 @@ def plot_three_views_elevation(
         visible = np.isfinite(pixels[:, 0]).reshape(elevation.shape)
         color = camera_colors[camera_name]
         # Use translucent filled footprints plus a boundary contour.
-        ax.contourf(yy, xx, visible.astype(float), levels=[0.5, 1.5], colors=[color], alpha=0.16)
-        ax.contour(yy, xx, visible.astype(float), levels=[0.5], colors=[color], linewidths=1.3)
+        ax.contourf(-yy, xx, visible.astype(float), levels=[0.5, 1.5], colors=[color], alpha=0.16)
+        ax.contour(-yy, xx, visible.astype(float), levels=[0.5], colors=[color], linewidths=1.3)
         ax.plot([], [], color=color, linewidth=3, label=f"{camera_name} FOV")
 
     # Draw all geometric/teleop paths belonging to this image_id, with a
@@ -166,14 +166,14 @@ def plot_three_views_elevation(
             goal = np.asarray(group["goal"][int(row)], dtype=np.float32)
             color = path_colors[source_name]
             label = f"{source_name} path" if local_index == 0 else None
-            ax.plot(path[:, 1], path[:, 0], color=color, linewidth=1.5, alpha=0.8, label=label)
-            ax.plot(goal[1], goal[0], marker="D", color=color, markersize=4, alpha=0.9)
+            ax.plot(-path[:, 1], path[:, 0], color=color, linewidth=1.5, alpha=0.8, label=label)
+            ax.plot(-goal[1], goal[0], marker="D", color=color, markersize=4, alpha=0.9)
             # Keep roughly five to eight circles per path for readability.
             step = max(1, len(path) // 7)
             for px, py, _ in path[::step]:
                 ax.add_patch(
                     Circle(
-                        (float(py), float(px)),
+                        (-float(py), float(px)),
                         radius_m,
                         fill=False,
                         edgecolor=color,
@@ -182,7 +182,7 @@ def plot_three_views_elevation(
                     )
                 )
     ax.set_title(f"elevation map + paths + circular footprint r={radius_m:.2f} m (robot frame)")
-    ax.set_xlabel("y left [m]")
+    ax.set_xlabel("horizontal display (left = robot-left)")
     ax.set_ylabel("x forward [m]")
     ax.legend(loc="upper right")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="elevation")

@@ -54,8 +54,9 @@ def _draw_paths(ax, group, image_id: int, color: str) -> int:
     for row in rows:
         path = np.asarray(group["path"][int(row)], dtype=np.float32)
         goal = np.asarray(group["goal"][int(row)], dtype=np.float32)
-        ax.plot(path[:, 1], path[:, 0], color=color, alpha=0.75, linewidth=1.2)
-        ax.plot(goal[1], goal[0], marker="D", color=color, markersize=4)
+        # Display convention: screen-left is robot-left, so y is negated.
+        ax.plot(-path[:, 1], path[:, 0], color=color, alpha=0.75, linewidth=1.2)
+        ax.plot(-goal[1], goal[0], marker="D", color=color, markersize=4)
     return int(len(rows))
 
 
@@ -82,6 +83,11 @@ def plot_one(
     elevation_group = zarr.open_group(str(mission / "data" / "elevation_map"), mode="r")
     path_group = zarr.open_group(str(mission / "data" / f"{source}_paths"), mode="r")
     elevation = _lookup_elevation(elevation_group, image_id)
+    elevation_rows = np.flatnonzero(
+        np.asarray(elevation_group["image_id"], dtype=np.int64) == image_id
+    )
+    elevation_row = int(elevation_rows[0])
+    elevation_timestamp = float(elevation_group["timestamp"][elevation_row])
     trav = compute_limo_traversability(elevation, filter_model, mppi_cfg, device)
     result = build_teacher_a(
         geometry=geometry,
@@ -149,25 +155,27 @@ def plot_one(
     elev_masked = np.ma.masked_where(~finite, elevation)
     elev_cmap = plt.get_cmap("terrain").copy()
     elev_cmap.set_bad("#bdbdbd")
-    axes[0].imshow(elev_masked, origin="lower", extent=extent, cmap=elev_cmap, aspect="equal")
+    # Display convention matches visualize_bev_map.py:
+    # top=front, bottom=rear, left=robot-left, right=robot-right.
+    axes[0].imshow(np.fliplr(elev_masked), origin="lower", extent=extent, cmap=elev_cmap, aspect="equal")
     axes[0].set_title(f"Elevation + {source} paths, image_id={image_id}", fontsize=14)
-    axes[0].set_xlabel("y left [m]")
+    axes[0].set_xlabel("horizontal display (left = robot-left)")
     axes[0].set_ylabel("x forward [m]")
     n_paths = _draw_paths(axes[0], path_group, image_id, "#1565c0" if source == "geometric" else "#8e24aa")
     if mppi_path is not None:
-        axes[0].plot(mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
+        axes[0].plot(-mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
     axes[0].scatter([0], [0], c="black", marker="+", s=100, linewidths=2, label="robot")
     axes[0].set_xlim(-map_size, map_size)
     axes[0].set_ylim(-map_size, map_size)
     axes[0].legend(loc="upper right")
 
-    axes[1].imshow(display, origin="lower", extent=extent, cmap=cmap, vmin=0, vmax=4, aspect="equal", interpolation="nearest")
+    axes[1].imshow(np.fliplr(display), origin="lower", extent=extent, cmap=cmap, vmin=0, vmax=4, aspect="equal", interpolation="nearest")
     axes[1].set_title(f"Teacher-A topological reachability, r={radius_m:.2f} m", fontsize=14)
-    axes[1].set_xlabel("y left [m]")
+    axes[1].set_xlabel("horizontal display (left = robot-left)")
     axes[1].set_ylabel("x forward [m]")
     _draw_paths(axes[1], path_group, image_id, "white")
     if mppi_path is not None:
-        axes[1].plot(mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
+        axes[1].plot(-mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
     axes[1].scatter([0], [0], c="black", marker="+", s=100, linewidths=2)
     axes[1].set_xlim(-map_size, map_size)
     axes[1].set_ylim(-map_size, map_size)
@@ -184,7 +192,8 @@ def plot_one(
         fontsize=9,
     )
     fig.suptitle(
-        f"{mission.name} | {source} | image_id={image_id} | paths={n_paths} | "
+        f"{mission.name} | {source} | image_id={image_id} | elevation_row={elevation_row} | "
+        f"elev_ts={elevation_timestamp:.6f} | paths={n_paths} | "
         f"MPPI goal=({reference_goal[0]:.2f}, {reference_goal[1]:.2f})",
         fontsize=16,
     )
