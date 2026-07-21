@@ -1,0 +1,19 @@
+dataset_root: /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET
+output_dir: /home/robot-device/yangyujie/Try2/teacher_a_path_calibration_stage1
+missions:
+  - 2024-11-02-21-12-51
+  - 2024-11-03-07-52-45
+
+map_size: 4.0
+map_resolution: 0.04
+dense_sampling_interval_m: 0.02
+timestamp_tolerance_s: 0.05
+paths_per_source_per_mission: 8
+paired_image_ids_per_mission: 4
+
+primary_radii_m: [0.0, 0.26, 0.61]
+radius_scan_m: [0.20, 0.24, 0.28, 0.32, 0.36, 0.40, 0.48, 0.56, 0.64]
+
+device: cpu
+seed: 42
+mppi_config: dataset_builder/configs/build.yaml

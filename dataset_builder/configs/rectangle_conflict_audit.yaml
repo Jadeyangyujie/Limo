@@ -1,0 +1,22 @@
+dataset_root: /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET
+medium_results_dir: /home/robot-device/yangyujie/Try2/teacher_a_path_calibration_medium
+output_dir: /home/robot-device/yangyujie/Try2/rectangle_conflict_audit
+missions:
+  - 2024-11-02-21-12-51
+  - 2024-11-03-07-52-45
+
+map_size: 4.0
+map_resolution: 0.04
+dense_sampling_interval_m: 0.02
+circle_radius_m: 0.28
+controls_per_mission_source: 5
+device: cpu
+mppi_config: dataset_builder/configs/build.yaml
+figure_dpi: 220
+
+# Diagnostic-only severity thresholds. These do not alter any label.
+isolated_max_unique_cells: 2
+isolated_max_run_m: 0.06
+sustained_min_run_m: 0.20
+deep_min_fatal_ratio: 0.10
+deep_min_component_cells: 24
