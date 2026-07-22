@@ -1,32 +1,68 @@
-"""Generate large Teacher-A circular topological reachability figures.
+"""Generate large, seven-state Teacher-A reachability figures.
 
-Each output figure contains the r=0.26 m Teacher-A state map and all geo/tel
-paths belonging to the selected image_id.  Inputs are read-only.
+Each output figure joins hdr_left/front/right by their shared ``image_id`` and
+shows the matching elevation map, all requested geo/tel paths, and the complete
+Teacher-A state map. Inputs are read-only.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
-import torch
 import zarr
 from omegaconf import OmegaConf
 from PIL import Image
 
-from dataset_builder.mppi_planner.mppi_planner import GridMap2D, MPPIPlanner
 from dataset_builder.mppi_planner.traversability_filter import get_filter_torch
 from dataset_builder.reachability.coordinates import MapGeometry
-from dataset_builder.reachability.path_calibration import circular_structure
-from dataset_builder.reachability.teacher_a import (
-    ReachabilityState,
-    build_teacher_a,
-)
+from dataset_builder.reachability.teacher_a import ReachabilityState, build_teacher_a
 from dataset_builder.reachability.traversability import compute_limo_traversability
-from dataset_builder.src.visualize import load_cameras, _project_fisheye
+
+
+PATH_COLORS = {"geometric": "#00d5ff", "teleop": "#ff4dcc"}
+PATH_LABELS = {"geometric": "geometric path", "teleop": "teleop path"}
+STATE_COLORS = (
+    "#000000",  # outside domain
+    "#a8a8a8",  # unknown center
+    "#e53935",  # locally blocked
+    "#7f0000",  # clearance blocked
+    "#666666",  # unknown footprint
+    "#f59e0b",  # traversable but disconnected
+    "#2ca25f",  # reachable
+)
+STATE_CMAP = ListedColormap(STATE_COLORS)
+STATE_NORM = BoundaryNorm(np.arange(-0.5, 7.5, 1.0), STATE_CMAP.N)
+STATE_DESCRIPTIONS = (
+    "footprint crosses planning domain",
+    "center cell is unknown",
+    "center risk reaches fatal threshold",
+    "safe center; footprint overlaps fatal",
+    "known safe center; footprint overlaps unknown",
+    "configuration-free but disconnected from root",
+    "configuration-free and connected to root",
+)
+
+
+def _state_legend_handles() -> list:
+    return [
+        plt.Line2D(
+            [],
+            [],
+            marker="s",
+            color=color,
+            markeredgecolor="white" if index == 0 else color,
+            linestyle="",
+            markersize=9,
+            label=f"{index} {ReachabilityState(index).name} — {description}",
+        )
+        for index, (color, description) in enumerate(zip(STATE_COLORS, STATE_DESCRIPTIONS))
+    ]
 
 
 def _lookup_elevation(group, image_id: int) -> np.ndarray:
@@ -37,8 +73,33 @@ def _lookup_elevation(group, image_id: int) -> np.ndarray:
     return np.asarray(group["elevation"][int(rows[0])], dtype=np.float32)
 
 
-def _path_ids(group) -> np.ndarray:
-    return np.unique(np.asarray(group["image_id"], dtype=np.int64))
+def _open_path_groups(mission: Path, sources: tuple[str, ...]) -> dict[str, object]:
+    groups = {}
+    for source in sources:
+        path = mission / "data" / f"{source}_paths"
+        if path.exists():
+            groups[source] = zarr.open_group(str(path), mode="r")
+    return groups
+
+
+def _eligible_image_ids(
+    mission: Path, elevation_group, path_groups: dict[str, object]
+) -> np.ndarray:
+    elevation_ids = set(map(int, np.asarray(elevation_group["image_id"], dtype=np.int64)))
+    path_ids: set[int] = set()
+    for group in path_groups.values():
+        path_ids.update(map(int, np.asarray(group["image_id"], dtype=np.int64)))
+    candidates = elevation_ids & path_ids
+    cameras = ("hdr_left", "hdr_front", "hdr_right")
+    valid = [
+        image_id
+        for image_id in sorted(candidates)
+        if all(
+            (mission / "images" / camera / f"{image_id:06d}.jpeg").exists()
+            for camera in cameras
+        )
+    ]
+    return np.asarray(valid, dtype=np.int64)
 
 
 def _evenly_spaced(values: np.ndarray, count: int) -> list[int]:
@@ -48,20 +109,58 @@ def _evenly_spaced(values: np.ndarray, count: int) -> list[int]:
     return [int(values[p]) for p in positions]
 
 
-def _draw_paths(ax, group, image_id: int, color: str) -> int:
+def _draw_paths(ax, group, image_id: int, color: str, label: str) -> int:
     ids = np.asarray(group["image_id"], dtype=np.int64)
     rows = np.flatnonzero(ids == image_id)
-    for row in rows:
+    for local_index, row in enumerate(rows):
         path = np.asarray(group["path"][int(row)], dtype=np.float32)
         goal = np.asarray(group["goal"][int(row)], dtype=np.float32)
-        ax.plot(path[:, 1], path[:, 0], color=color, alpha=0.75, linewidth=1.2)
-        ax.plot(goal[1], goal[0], marker="D", color=color, markersize=4)
+        line = ax.plot(
+            path[:, 1],
+            path[:, 0],
+            color=color,
+            alpha=0.9,
+            linewidth=2.0,
+            label=label if local_index == 0 else None,
+            zorder=12,
+        )[0]
+        line.set_path_effects(
+            [path_effects.Stroke(linewidth=3.5, foreground="black", alpha=0.7), path_effects.Normal()]
+        )
+        ax.plot(
+            goal[1],
+            goal[0],
+            marker="D",
+            markerfacecolor=color,
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            markersize=6,
+            zorder=13,
+        )
     return int(len(rows))
+
+
+def _format_map_axis(ax, geometry: MapGeometry) -> None:
+    extent = geometry.imshow_extent_yx
+    # Array rows are robot x and columns are robot y. Reverse the page x-axis
+    # so positive robot-left appears on the left side of the figure.
+    ax.set_xlim(extent[1], extent[0])
+    ax.set_ylim(extent[2], extent[3])
+    ax.set_aspect("equal")
+    ax.set_xlabel("y [m]  (robot left +)")
+    ax.set_ylabel("x [m]  (robot forward +)")
+    ax.axhline(0.0, color="white", alpha=0.25, linewidth=0.7)
+    ax.axvline(0.0, color="white", alpha=0.25, linewidth=0.7)
+
+
+def _camera_image(mission: Path, camera: str, image_id: int) -> np.ndarray:
+    path = mission / "images" / camera / f"{image_id:06d}.jpeg"
+    return np.asarray(Image.open(path).convert("RGB"))
 
 
 def plot_one(
     mission: Path,
-    source: str,
+    sources: tuple[str, ...],
     image_id: int,
     output: Path,
     *,
@@ -71,8 +170,7 @@ def plot_one(
     mppi_cfg,
     filter_model,
     device: str,
-    run_mppi: bool = True,
-) -> None:
+) -> dict:
     geometry = MapGeometry(
         int(round(2 * map_size / map_resolution)),
         int(round(2 * map_size / map_resolution)),
@@ -80,7 +178,7 @@ def plot_one(
         (-map_size, -map_size),
     )
     elevation_group = zarr.open_group(str(mission / "data" / "elevation_map"), mode="r")
-    path_group = zarr.open_group(str(mission / "data" / f"{source}_paths"), mode="r")
+    path_groups = _open_path_groups(mission, sources)
     elevation = _lookup_elevation(elevation_group, image_id)
     trav = compute_limo_traversability(elevation, filter_model, mppi_cfg, device)
     result = build_teacher_a(
@@ -91,112 +189,119 @@ def plot_one(
         inflation_radius_m=radius_m,
     )
 
-    path_ids = np.asarray(path_group["image_id"], dtype=np.int64)
-    path_rows = np.flatnonzero(path_ids == image_id)
-    if len(path_rows) == 0:
-        raise KeyError(f"no {source} path for image_id={image_id}")
-    reference_path = np.asarray(path_group["path"][int(path_rows[0])], dtype=np.float32)
-    reference_goal = np.asarray(path_group["goal"][int(path_rows[0])], dtype=np.float32)
-    mppi_path = None
-    if run_mppi:
-        planner = MPPIPlanner(mppi_cfg, device)
-        gridmap = GridMap2D(
-            elevation=torch.as_tensor(elevation, dtype=torch.float32, device=planner.objective.device),
-            resolution=map_resolution,
-            origin_xy=torch.tensor((-map_size, -map_size), dtype=torch.float32, device=planner.objective.device),
-        )
-        mppi_path = planner.plan(
-            gridmap,
-            torch.zeros(3, dtype=torch.float32, device=planner.objective.device),
-            torch.as_tensor(reference_goal, dtype=torch.float32, device=planner.objective.device),
-        ).detach().cpu().numpy()
+    matching_rows = {
+        source: np.flatnonzero(np.asarray(group["image_id"], dtype=np.int64) == image_id)
+        for source, group in path_groups.items()
+    }
+    if not any(len(rows) for rows in matching_rows.values()):
+        raise KeyError(f"no requested path for image_id={image_id}")
 
-    # Strict shared image_id camera lookup for the visual comparison.
-    front_image = np.asarray(Image.open(mission / "images" / "hdr_front" / f"{image_id:06d}.jpeg").convert("RGB"))
-    camera_images = []
-    for camera_name in ("hdr_left", "hdr_front", "hdr_right"):
-        image_path = mission / "images" / camera_name / f"{image_id:06d}.jpeg"
-        camera_images.append(np.asarray(Image.open(image_path).convert("RGB")) if image_path.exists() else None)
-    available = [im for im in camera_images if im is not None]
-    common_height = min(im.shape[0] for im in available)
-    resized = []
-    for im in camera_images:
-        if im is None:
-            resized.append(np.full((common_height, common_height, 3), 35, dtype=np.uint8))
-        else:
-            width = int(round(im.shape[1] * common_height / im.shape[0]))
-            resized.append(np.asarray(Image.fromarray(im).resize((width, common_height))))
-    camera_strip = np.concatenate(resized, axis=1)
+    cameras = ("hdr_left", "hdr_front", "hdr_right")
+    camera_images = [_camera_image(mission, camera, image_id) for camera in cameras]
 
-    state = np.asarray(result.state, dtype=np.int16)
-    # Reachable is visually emphasized; other states remain distinct.
-    display = np.full(state.shape, 0, dtype=np.int8)  # unknown/outside
-    display[state == int(ReachabilityState.REACHABLE)] = 1
-    display[state == int(ReachabilityState.CLEARANCE_BLOCKED)] = 2
-    display[state == int(ReachabilityState.LOCALLY_BLOCKED)] = 3
-    display[state == int(ReachabilityState.TRAVERSABLE_BUT_DISCONNECTED)] = 4
-    cmap = ListedColormap(["#bdbdbd", "#35a853", "#f6c344", "#e53935", "#8e44ad"])
+    fig = plt.figure(figsize=(24, 15.5), constrained_layout=True)
+    grid = fig.add_gridspec(
+        3, 3, height_ratios=(0.78, 1.45, 0.24), width_ratios=(1, 1, 1)
+    )
+    for column, (camera, camera_image) in enumerate(zip(cameras, camera_images)):
+        camera_ax = fig.add_subplot(grid[0, column])
+        camera_ax.imshow(camera_image)
+        camera_ax.set_title(f"{camera}  |  image_id={image_id}", fontsize=13)
+        camera_ax.axis("off")
 
-    fig = plt.figure(figsize=(20, 14), constrained_layout=True)
-    grid = fig.add_gridspec(2, 2, height_ratios=(0.75, 1.25))
-    camera_ax = fig.add_subplot(grid[0, :])
-    camera_ax.imshow(camera_strip)
-    camera_ax.set_title("hdr_left | hdr_front | hdr_right  (shared image_id)", fontsize=14)
-    camera_ax.axis("off")
-    axes = [fig.add_subplot(grid[1, 0]), fig.add_subplot(grid[1, 1])]
-    extent = (-map_size, map_size, -map_size, map_size)
+    elevation_ax = fig.add_subplot(grid[1, 0])
+    state_ax = fig.add_subplot(grid[1, 1:])
     finite = np.isfinite(elevation)
     elev_masked = np.ma.masked_where(~finite, elevation)
     elev_cmap = plt.get_cmap("terrain").copy()
     elev_cmap.set_bad("#bdbdbd")
-    axes[0].imshow(elev_masked, origin="lower", extent=extent, cmap=elev_cmap, aspect="equal")
-    axes[0].set_title(f"Elevation + {source} paths, image_id={image_id}", fontsize=14)
-    axes[0].set_xlabel("y left [m]")
-    axes[0].set_ylabel("x forward [m]")
-    n_paths = _draw_paths(axes[0], path_group, image_id, "#1565c0" if source == "geometric" else "#8e24aa")
-    if mppi_path is not None:
-        axes[0].plot(mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
-    axes[0].scatter([0], [0], c="black", marker="+", s=100, linewidths=2, label="robot")
-    axes[0].set_xlim(-map_size, map_size)
-    axes[0].set_ylim(-map_size, map_size)
-    axes[0].legend(loc="upper right")
-
-    axes[1].imshow(display, origin="lower", extent=extent, cmap=cmap, vmin=0, vmax=4, aspect="equal", interpolation="nearest")
-    axes[1].set_title(f"Teacher-A topological reachability, r={radius_m:.2f} m", fontsize=14)
-    axes[1].set_xlabel("y left [m]")
-    axes[1].set_ylabel("x forward [m]")
-    _draw_paths(axes[1], path_group, image_id, "white")
-    if mppi_path is not None:
-        axes[1].plot(mppi_path[:, 1], mppi_path[:, 0], color="#ff00ff", linewidth=2.5, label="recomputed MPPI")
-    axes[1].scatter([0], [0], c="black", marker="+", s=100, linewidths=2)
-    axes[1].set_xlim(-map_size, map_size)
-    axes[1].set_ylim(-map_size, map_size)
-    axes[1].legend(
-        handles=[
-            plt.Line2D([], [], color="#35a853", linewidth=8, label="reachable"),
-            plt.Line2D([], [], color="#f6c344", linewidth=8, label="clearance blocked"),
-            plt.Line2D([], [], color="#e53935", linewidth=8, label="locally blocked"),
-            plt.Line2D([], [], color="#8e44ad", linewidth=8, label="disconnected"),
-            plt.Line2D([], [], color="#bdbdbd", linewidth=8, label="unknown/outside"),
-            plt.Line2D([], [], color="#ff00ff", linewidth=3, label="recomputed MPPI"),
-        ],
-        loc="upper right",
-        fontsize=9,
+    elevation_image = elevation_ax.imshow(
+        elev_masked,
+        origin="lower",
+        extent=geometry.imshow_extent_yx,
+        cmap=elev_cmap,
+        aspect="equal",
     )
+    elevation_ax.set_title("Elevation + matched expert paths", fontsize=14)
+    path_counts = {}
+    for source, group in path_groups.items():
+        path_counts[source] = _draw_paths(
+            elevation_ax, group, image_id, PATH_COLORS[source], PATH_LABELS[source]
+        )
+    elevation_ax.scatter(
+        [0], [0], c="#ffffff", edgecolors="black", marker="*", s=150, linewidths=1.2, label="robot"
+    )
+    _format_map_axis(elevation_ax, geometry)
+    elevation_ax.legend(loc="upper right", fontsize=9)
+    fig.colorbar(elevation_image, ax=elevation_ax, fraction=0.046, pad=0.04, label="elevation [m]")
+
+    state_ax.imshow(
+        result.state,
+        origin="lower",
+        extent=geometry.imshow_extent_yx,
+        cmap=STATE_CMAP,
+        norm=STATE_NORM,
+        aspect="equal",
+        interpolation="nearest",
+    )
+    state_ax.set_title(
+        f"Teacher-A seven-state reachability  |  requested r={radius_m:.2f} m  "
+        f"(grid r={result.effective_radius_m:.2f} m)",
+        fontsize=14,
+    )
+    for source, group in path_groups.items():
+        _draw_paths(state_ax, group, image_id, PATH_COLORS[source], PATH_LABELS[source])
+    state_ax.scatter(
+        [0], [0], c="#ffffff", edgecolors="black", marker="*", s=150, linewidths=1.2, zorder=15
+    )
+    _format_map_axis(state_ax, geometry)
+    state_handles = _state_legend_handles()
+    state_handles.extend(
+        plt.Line2D([], [], color=PATH_COLORS[source], linewidth=3, label=PATH_LABELS[source])
+        for source in path_groups
+        if path_counts.get(source, 0) > 0
+    )
+    state_handles.append(
+        plt.Line2D([], [], marker="*", color="white", markeredgecolor="black", linestyle="", markersize=11, label="robot root")
+    )
+    legend_ax = fig.add_subplot(grid[2, :])
+    legend_ax.axis("off")
+    legend_ax.legend(
+        handles=state_handles,
+        loc="center",
+        fontsize=9.5,
+        ncol=3,
+        framealpha=0.96,
+    )
+
+    counts_text = " | ".join(f"{source} paths={path_counts.get(source, 0)}" for source in sources)
+    root_text = "valid" if result.root.configuration_valid else f"invalid: {result.root.failure_reason}"
     fig.suptitle(
-        f"{mission.name} | {source} | image_id={image_id} | paths={n_paths} | "
-        f"MPPI goal=({reference_goal[0]:.2f}, {reference_goal[1]:.2f})",
-        fontsize=16,
+        f"mission={mission.name}  |  image_id={image_id}  |  {counts_text}  |  root={root_text}",
+        fontsize=17,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=220, bbox_inches="tight")
     plt.close(fig)
+    return {
+        "mission": mission.name,
+        "image_id": image_id,
+        "output": str(output),
+        "path_counts": path_counts,
+        "root_configuration_valid": result.root.configuration_valid,
+        "root_failure_reason": result.root.failure_reason,
+        "requested_radius_m": radius_m,
+        "effective_radius_m": result.effective_radius_m,
+        "state_counts": result.state_counts(),
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mission", type=Path, required=True)
-    parser.add_argument("--source", choices=("geo", "tel", "geometric", "teleop"), required=True)
+    parser.add_argument(
+        "--source", choices=("geo", "tel", "geometric", "teleop", "both"), default="both"
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--radius", type=float, default=0.26)
@@ -204,27 +309,35 @@ def main() -> None:
     parser.add_argument("--map-resolution", type=float, default=0.04)
     parser.add_argument("--mppi-config", type=Path, default=Path("dataset_builder/configs/build.yaml"))
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--skip-mppi", action="store_true")
     args = parser.parse_args()
     source = {"geo": "geometric", "tel": "teleop"}.get(args.source, args.source)
+    sources = ("geometric", "teleop") if source == "both" else (source,)
     cfg = OmegaConf.load(args.mppi_config).mppi
-    group = zarr.open_group(str(args.mission / "data" / f"{source}_paths"), mode="r")
-    image_ids = _evenly_spaced(_path_ids(group), args.count)
+    elevation_group = zarr.open_group(str(args.mission / "data" / "elevation_map"), mode="r")
+    path_groups = _open_path_groups(args.mission, sources)
+    image_ids = _evenly_spaced(
+        _eligible_image_ids(args.mission, elevation_group, path_groups), args.count
+    )
     filter_model = get_filter_torch(args.device)
+    records = []
     for image_id in image_ids:
-        plot_one(
-            args.mission,
-            source,
-            image_id,
-            args.output_dir / f"{source}_image_{image_id:06d}_r{args.radius:.2f}.png",
-            radius_m=args.radius,
-            map_size=args.map_size,
-            map_resolution=args.map_resolution,
-            mppi_cfg=cfg,
-            filter_model=filter_model,
-            device=args.device,
-            run_mppi=not args.skip_mppi,
+        records.append(
+            plot_one(
+                args.mission,
+                sources,
+                image_id,
+                args.output_dir / f"{args.mission.name}_image_{image_id:06d}_r{args.radius:.2f}.png",
+                radius_m=args.radius,
+                map_size=args.map_size,
+                map_resolution=args.map_resolution,
+                mppi_cfg=cfg,
+                filter_model=filter_model,
+                device=args.device,
+            )
         )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = args.output_dir / f"{args.mission.name}_manifest.json"
+    manifest.write_text(json.dumps(records, indent=2), encoding="utf-8")
     print(f"generated {len(image_ids)} figures in {args.output_dir}")
 
 

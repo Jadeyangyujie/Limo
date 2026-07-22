@@ -109,7 +109,7 @@ clearance blocked 优先于 unknown footprint。unknown dilation 的 border valu
 5. footprint 不 clearance blocked；
 6. footprint 不 unknown footprint。
 
-只有 configuration_free[root_index] 为真才执行搜索。当前实现不会自动把无效 root 移到邻近 free cell；审计脚本中的 root anchoring 只是诊断比较，不改变正式 Teacher-A。
+只有 configuration_free[root_index] 为真才执行搜索。当前实现不会自动把无效 root 移到邻近 free cell。
 
 ## 8. Strict Dijkstra
 
@@ -156,8 +156,6 @@ clearance blocked 优先于 unknown footprint。unknown dilation 的 border valu
 
 正式 Teacher-A 使用圆形、无 yaw footprint，不能表达矩形前后悬伸、相同中心不同 yaw 的碰撞差异，也不包含动力学约束。
 
-Rectangle Conflict Audit 的 yaw-aware rectangle 是诊断工具，不修改 Teacher-A。
-
 MPPI 的 get_trav_cost 会：
 
 1. 按 yaw 旋转 footprint sample；
@@ -181,16 +179,19 @@ MPPI 的 get_trav_cost 会：
 1. 读取 elevation；
 2. 重新计算 traversability/risk；
 3. 调用 build_teacher_a(radius=0.26)；
-4. 显示 reachable、clearance blocked、local blocked、unknown、disconnected；
-5. 叠加该 image_id 下所有 geo 或 tel paths；
-6. 可选重新运行 MPPI，使用该 image_id 第一个 path 的 goal；
-7. 显示 left/front/right 原图和 elevation/topology 图。
+4. 用独立颜色显示 0--6 全部七种状态；
+5. 同时叠加该 image_id 下所有 geometric/teleop paths；
+6. 显示严格共享 image_id 的 hdr_left/front/right 原图；
+7. 写出每个 mission 的 manifest，记录路径数量、root 状态和状态像素统计。
 
 示例：
 
-    conda run -n limo python -m dataset_builder.src.plot_topology_batch       --mission /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET/2024-11-02-21-12-51       --source geo --count 10 --radius 0.26       --output-dir /home/robot-device/yangyujie/Try2/topology_geo_r026
+    conda run -n limo python -m dataset_builder.src.plot_topology_batch \
+      --mission /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET/2024-11-02-21-12-51 \
+      --source both --count 10 --radius 0.26 \
+      --output-dir /home/robot-device/yangyujie/Try2/reachability_visualization_20
 
---source tel 对应 teleop_paths；--skip-mppi 可关闭重新规划。
+`--source` 可选 `both`、`geo/geometric` 或 `tel/teleop`。
 
 ## 12. 输出与保守性
 
@@ -209,4 +210,3 @@ TeacherAResult 还保留 planning_domain、known_trav、local_traversable、loca
 7. 二维圆形 footprint 不包含 yaw。
 
 总结：当前方法是“risk 图 + 圆形 footprint 腐蚀/膨胀 + 根节点 strict Dijkstra”的二维中心拓扑场。它适合作为中心线拓扑候选和保守安全基准，但不能解释为带方向的完整整机 SE(2) 可达性。
-

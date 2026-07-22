@@ -5,9 +5,6 @@ from dataset_builder.reachability.teacher_a import (
     ReachabilityState,
     TeacherAResult,
     build_teacher_a,
-    reconstruct_path,
-    select_diagnostic_targets,
-    validate_reconstructed_path,
 )
 
 __all__ = [
@@ -15,7 +12,4 @@ __all__ = [
     "ReachabilityState",
     "TeacherAResult",
     "build_teacher_a",
-    "reconstruct_path",
-    "select_diagnostic_targets",
-    "validate_reconstructed_path",
 ]
