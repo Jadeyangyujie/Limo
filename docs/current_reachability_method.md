@@ -1,212 +1,173 @@
-# 当前 Reachability 生成方法
+# 当前 Reachability 五分类生成方法
 
-本文档依据当前仓库代码整理，主要实现位于 dataset_builder/reachability/teacher_a.py、traversability.py 和 coordinates.py。
+当前实现位于 `dataset_builder/reachability/teacher_a.py`，输出适合作为后续 RGB 网络监督的五分类标签和一个独立 ignore 掩码：
 
-当前方法是一个以机器人中心为根、带圆形 footprint 约束的二维几何可达场。地图状态只有 (x,y)，没有 yaw 维度，也没有把转弯半径、速度或动力学约束放进搜索，因此不是完整 SE(2) reachability。
+```text
+semantic_label: uint8[H, W]，取值 0--4
+ignore_mask:    bool[H, W]
+```
 
-## 1. 输入与坐标
+当前阶段 `ignore_mask` 默认为全 False；以后可根据相机内外参和 FOV 单独赋值，而不增加第六个互斥类别。
 
-默认 elevation map 大小为 8 m x 8 m、分辨率 0.04 m，通常为 200 x 200 数组。
+## 五类语义
 
-MapGeometry 规定：
+```text
+UNKNOWN                      = 0
+LOCALLY_BLOCKED              = 1
+CLEARANCE_BLOCKED            = 2
+TRAVERSABLE_BUT_DISCONNECTED = 3
+REACHABLE                    = 4
+```
 
-- 数组轴 0 是机器人前方 x；
-- 数组轴 1 是机器人左方 y；
-- index (0,0) 的世界坐标锚点是 (-4,-4)；
-- 映射使用 floor((xy-origin)/resolution)；
-- 根位置是世界坐标 (0,0)。
+- `UNKNOWN`：中心栅格没有可靠 elevation/risk；unknown 不再向邻近中心膨胀。
+- `LOCALLY_BLOCKED`：中心栅格已知，且 risk 达到 fatal threshold。
+- `CLEARANCE_BLOCKED`：中心可通行，但圆形 footprint 覆盖 fatal 栅格。
+- `TRAVERSABLE_BUT_DISCONNECTED`：配置空间局部可行，但不能从机器人根节点到达。
+- `REACHABLE`：配置空间可行，并且与机器人根节点连通。
 
-因此 index (i,j) 的栅格锚点约为：
+## Ego unknown 特殊处理
 
-    x = -4 + i * 0.04
-    y = -4 + j * 0.04
+只有固定 `ego_mask` 内、由机器人本体遮挡产生的 unknown 才被信任：
 
-该 floor 量化与 MPPI 的 world_to_map_idx 一致。
+```text
+trusted_ego_unknown = ego_mask & ~known_trav
+effective_known = known_trav | trusted_ego_unknown
+```
 
-## 2. Elevation 到 risk
+默认可视化从 `build.yaml` 的 MPPI 车体矩形生成固定 ego mask：
 
-Teacher-A 不直接把 elevation 数值作为障碍，而是先调用 TraversabilityFilter：
+```text
+[[-0.55, -0.26], [0.55, 0.26]] metres
+```
 
-    score = TraversabilityFilter(elevation)
-    risk = 1 - score
+该放行发生在 obstacle clearance 和 Dijkstra 之前。代码不会在搜索完成后把 ego mask 强制写成 `REACHABLE`。
 
-score 越大越安全，risk 越大越危险。原始 elevation 的 NaN 会恢复为 unknown；配置 border_cells=3 还会把最外侧 3 个栅格设为 NaN。因此：
+已知 fatal 栅格即使位于 ego mask 内也不会被覆盖。ego mask 外的墙后、视野边缘和未观测中心仍然是 `UNKNOWN`，但 unknown 不再作为 footprint 障碍影响相邻已知中心。
 
-    known_trav = isfinite(risk)
+## 配置空间
 
-默认 fatal threshold 为 0.9：
+圆形 footprint 半径按地图分辨率向上取整。例如分辨率为 0.04 m 时，请求半径 0.26 m 对应实际栅格半径 0.28 m。该 footprint 现在只用于膨胀 fatal 障碍。
 
-    fatal = known_trav and risk >= 0.9
+不再腐蚀地图边界，也不再生成 outside-domain 环。整张 elevation map 直接参与标签生成：中心没有有效 reachability risk 的像素为 `UNKNOWN`，边缘有效像素不会因为人工 `border_cells` 再变成 unknown。
 
-safe/risky 区间主要用于 MPPI soft cost；Teacher-A 的硬障碍使用 fatal threshold。
+```text
+locally_blocked = known_reachability & (reachability_risk >= fatal_threshold)
 
-## 3. 圆形 footprint 离散化
+local_traversable = (
+    (known_reachability & (reachability_risk < fatal_threshold)) |
+    trusted_ego_unknown
+)
 
-Teacher-A 调用 circular_structure(radius_m, resolution)。请求半径向上量化：
+blocked_overlap = dilate(locally_blocked, circular_footprint)
+clearance_blocked = local_traversable & blocked_overlap
+configuration_free = local_traversable & ~blocked_overlap
+```
 
-    radius_cells = ceil(radius_m / resolution)
-    effective_radius = radius_cells * resolution
+`reachability_risk` 的 CNN 感受野半径是 3 格。实现会仅在 CNN 推理期间，以最近的有效 elevation 填充 unknown 上下文，并在地图外添加 3 格复制边界；推理完成后，严格按原始 elevation 的中心 NaN 恢复 risk NaN。这样既不会让输入 NaN 经卷积传播而形成隐式 unknown 膨胀，也不会让 CNN 的 zero padding 在数组边缘制造虚假断崖。
 
-默认网格下：
+reachability 分支不应用 MPPI 的 `fatal_cells_buffer` 和 `border_cells`；fatal 障碍只在 `build_teacher_a` 中按所请求的圆形半径膨胀一次。MPPI 自己使用的原始 `score/risk/trav_cost` 保持不变。
 
-| 请求半径 | 栅格半径 | 有效半径 |
-|---:|---:|---:|
-| 0.26 m | 7 cells | 0.28 m |
-| 0.28 m | 7 cells | 0.28 m |
-| 0.61 m | 16 cells | 0.64 m |
+只有 root 自身属于 `configuration_free` 才执行 strict 8-neighbour Dijkstra。对角移动要求两个相邻正交栅格也为 free，禁止 diagonal corner cutting。
 
-圆结构满足 di^2 + dj^2 <= radius_cells^2。因此图中写 r=0.26 时，实际网格 footprint 是有效半径 0.28 m 的圆。
+```text
+reachable = configuration_free & isfinite(geodesic)
+disconnected = configuration_free & ~reachable
+```
 
-## 4. planning domain
+## 最终标签优先级
 
-默认整张地图是 domain support。为了保证完整 footprint 不越过地图边界，先做：
+```python
+semantic_label = np.full(shape, UNKNOWN, dtype=np.uint8)
+semantic_label[locally_blocked] = LOCALLY_BLOCKED
+semantic_label[clearance_blocked] = CLEARANCE_BLOCKED
+semantic_label[disconnected] = TRAVERSABLE_BUT_DISCONNECTED
+semantic_label[reachable] = REACHABLE
 
-    planning_domain = binary_erosion(domain_support, footprint)
-    outside_domain = not planning_domain
+ignore_mask = np.zeros(shape, dtype=bool)
+```
 
-即中心在原始地图内，但 footprint 越界时也会标为 outside domain。
+## 坐标和 image_id 关联
 
-## 5. 中心局部状态
+数组轴 0 是机器人前方 x，数组轴 1 是机器人左方 y。显示时使用 `origin="lower"`，并反转页面横轴，因此：
 
-在 planning domain 内先检查中心：
+- 上：机器人前方；
+- 下：机器人后方；
+- 左：机器人左侧；
+- 右：机器人右侧。
 
-    unknown_center    = planning_domain and not known_trav
-    local_traversable = planning_domain and known_trav and risk < fatal_th
-    local_blocked     = planning_domain and known_trav and risk >= fatal_th
+可视化不会把 `image_id` 当作 elevation 行号，而是严格查找：
 
-这一步尚未检查 footprint 周围栅格。
+```python
+rows = np.flatnonzero(elevation_group["image_id"] == image_id)
+elevation = elevation_group["elevation"][rows[0]]
+```
 
-## 6. Clearance 与 unknown footprint
+三路 HDR 则使用共享文件 ID：`images/<camera>/{image_id:06d}.jpeg`，不使用 `sequence_id` 作为文件名。
 
-先构造 fatal mask，并用圆结构做 binary dilation：
+## 可视化
 
-    raw_local_blocked = known_trav and risk >= fatal_th
-    blocked_overlap = dilate(raw_local_blocked, footprint, border_value=0)
-    unknown_overlap = dilate(not known_trav, footprint, border_value=1)
+最终入口为 `dataset_builder/src/plot_topology_batch.py`：
 
-然后：
+```bash
+conda run -n limo python -m dataset_builder.src.plot_topology_batch \
+  --mission /path/to/LIMO_DATASET/<mission> \
+  --source both \
+  --count 10 \
+  --radius 0.26 \
+  --output-dir /path/to/output
+```
 
-    clearance_blocked = local_traversable and blocked_overlap
+每张图包含严格共享 image_id 的 hdr_left/front/right、elevation、geometric/teleop paths、五分类标签、机器人根节点和固定 ego mask 边界。每个 mission 同时写出 manifest，包含五类像素数、ignore 数量和 trusted ego unknown 数量。
 
-    unknown_footprint_overlap = local_traversable and unknown_overlap
+## 正式 Zarr 输出
 
-    unknown_footprint =
-        local_traversable and not clearance_blocked and unknown_overlap
+生成入口为 `dataset_builder/src/build_reachability_5labels.py`。它固定读取：
 
-    configuration_free =
-        local_traversable and not blocked_overlap and not unknown_overlap
+```text
+<mission_timestamp>/data/elevation_map/
+```
 
-clearance blocked 优先于 unknown footprint。unknown dilation 的 border value 为 1，因此靠近未知或边界的 footprint 是保守处理。
+并固定写入时间戳目录直属的：
 
-## 7. 根节点
+```text
+<mission_timestamp>/reachability_5labels/
+```
 
-默认 root_xy=(0,0)。根节点必须满足：
+输出数组仅包括：
 
-1. 在 grid 内；
-2. 在 planning domain 内；
-3. 中心 known；
-4. 中心 local traversable；
-5. footprint 不 clearance blocked；
-6. footprint 不 unknown footprint。
+```text
+state_label [N,H,W] uint8
+ignore_mask [N,H,W] bool
+risk        [N,H,W] float32
+geodesic_m  [N,H,W] float32
+image_id    [N]，dtype 和数值原样复制
+timestamp   [N]，仅当输入存在，dtype 和数值原样复制
+```
 
-只有 configuration_free[root_index] 为真才执行搜索。当前实现不会自动把无效 root 移到邻近 free cell；审计脚本中的 root anchoring 只是诊断比较，不改变正式 Teacher-A。
+`geodesic_m` 只在 `state_label == 4` 的位置有限，其余位置为 NaN；root 无法启动 Dijkstra 时整帧均为 NaN。`geodesic_valid` 和 `root_valid` 不会被保存。每一行严格对应输入 elevation axis 0 的同一行，不选择、重排或跳过帧。
 
-## 8. Strict Dijkstra
+默认拒绝覆盖已有输出：
 
-有效根节点上执行 strict_dijkstra(configuration_free, root_index, resolution)。
+```bash
+conda run -n limo python -m dataset_builder.src.build_reachability_5labels \
+  --mission-dir /path/to/LIMO_DATASET/<mission_timestamp> \
+  --device cuda
+```
 
-搜索使用 8 邻域：
+确认重新生成时显式增加：
 
-- 水平/垂直代价为 1 * resolution；
-- 对角代价为 sqrt(2) * resolution；
-- 禁止 diagonal corner cutting：对角移动时水平和垂直邻格也必须 free。
+```text
+--overwrite
+```
 
-输出：
+生成参数和类别定义保存在 Zarr group attrs 中，不创建额外数组字段。
 
-- geodesic_m：根到每个栅格的距离；
-- predecessor：路径回溯指针；
-- reachable = configuration_free 且 geodesic_m 有限；
-- traversable_but_disconnected = configuration_free 且不可从 root 到达。
+一次生成数据集根目录下的全部 mission：
 
-因此 reachable 不只是局部 free，而是从机器人根真正连通到的区域。
+```bash
+conda run -n limo python -m dataset_builder.src.build_reachability_5labels \
+  --dataset-dir /path/to/LIMO_DATASET \
+  --device cuda
+```
 
-## 9. 最终状态
-
-状态枚举为：
-
-    OUTSIDE_DOMAIN               = 0
-    UNKNOWN_CENTER               = 1
-    LOCALLY_BLOCKED              = 2
-    CLEARANCE_BLOCKED            = 3
-    UNKNOWN_FOOTPRINT            = 4
-    TRAVERSABLE_BUT_DISCONNECTED = 5
-    REACHABLE                    = 6
-
-最终语义优先级为：
-
-    outside_domain
-     -> unknown_center
-     -> locally_blocked
-     -> clearance_blocked
-     -> unknown_footprint
-     -> traversable_but_disconnected
-     -> reachable
-
-## 10. 与矩形和 MPPI 的区别
-
-正式 Teacher-A 使用圆形、无 yaw footprint，不能表达矩形前后悬伸、相同中心不同 yaw 的碰撞差异，也不包含动力学约束。
-
-Rectangle Conflict Audit 的 yaw-aware rectangle 是诊断工具，不修改 Teacher-A。
-
-MPPI 的 get_trav_cost 会：
-
-1. 按 yaw 旋转 footprint sample；
-2. floor quantize 到栅格；
-3. 对有效 sample 读取 traversability cost；
-4. 单独计数 unknown；
-5. 对有效样本做 arithmetic mean；
-6. unknown fraction 乘以 unknown cost；
-7. 再进入 50-state trajectory objective。
-
-所以 MPPI 不是 footprint risk 的 max，也不是任一 fatal sample 就立即令轨迹失败。Teacher-A hard blocked 与 MPPI soft cost 是不同判据。
-
-## 11. 当前拓扑图脚本
-
-当前脚本为：
-
-    dataset_builder/src/plot_topology_batch.py
-
-它对每个 image_id：
-
-1. 读取 elevation；
-2. 重新计算 traversability/risk；
-3. 调用 build_teacher_a(radius=0.26)；
-4. 显示 reachable、clearance blocked、local blocked、unknown、disconnected；
-5. 叠加该 image_id 下所有 geo 或 tel paths；
-6. 可选重新运行 MPPI，使用该 image_id 第一个 path 的 goal；
-7. 显示 left/front/right 原图和 elevation/topology 图。
-
-示例：
-
-    conda run -n limo python -m dataset_builder.src.plot_topology_batch       --mission /home/robot-device/yangyujie/BEV_LIMO/LIMO_DATASET/2024-11-02-21-12-51       --source geo --count 10 --radius 0.26       --output-dir /home/robot-device/yangyujie/Try2/topology_geo_r026
-
---source tel 对应 teleop_paths；--skip-mppi 可关闭重新规划。
-
-## 12. 输出与保守性
-
-TeacherAResult 还保留 planning_domain、known_trav、local_traversable、local_blocked、clearance_blocked、unknown masks、configuration_free、reachable、disconnected、geodesic、predecessor 和 root status。
-
-统计时不应只报告 reachable，还应报告 configuration-free、disconnected、unknown footprint、clearance blocked 和 locally blocked。
-
-主要保守性来源是：
-
-1. 半径向上取整；
-2. NaN 和边界进入 unknown 传播；
-3. unknown footprint 从 configuration free 中排除；
-4. fatal threshold 硬切分；
-5. strict Dijkstra 禁止 diagonal corner cutting；
-6. root 必须自身 configuration free；
-7. 二维圆形 footprint 不包含 yaw。
-
-总结：当前方法是“risk 图 + 圆形 footprint 腐蚀/膨胀 + 根节点 strict Dijkstra”的二维中心拓扑场。它适合作为中心线拓扑候选和保守安全基准，但不能解释为带方向的完整整机 SE(2) 可达性。
-
+批量模式会显示 mission 总进度和当前 mission 的帧进度；单 mission 模式显示逐帧进度。批量执行前会统一检查已有输出，未指定 `--overwrite` 时不会生成一部分后才中止。
