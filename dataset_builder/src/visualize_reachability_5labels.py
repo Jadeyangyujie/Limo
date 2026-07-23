@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
+
+# Avoid warnings and repeated font-cache rebuilding when the user's default
+# Matplotlib config directory is read-only on a compute node.
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(tempfile.gettempdir()) / f"limo-matplotlib-{os.getuid()}"),
+)
 
 import matplotlib
 

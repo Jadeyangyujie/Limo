@@ -171,3 +171,21 @@ conda run -n limo python -m dataset_builder.src.build_reachability_5labels \
 ```
 
 批量模式会显示 mission 总进度和当前 mission 的帧进度；单 mission 模式显示逐帧进度。批量执行前会统一检查已有输出，未指定 `--overwrite` 时不会生成一部分后才中止。
+
+## 已生成标签的可视化
+
+从指定 mission 的 `reachability_5labels` 中均匀选择 30 帧，并严格按相同 axis-0 row 读取 elevation、按 `image_id` 读取三路 HDR 图像：
+
+```bash
+conda run -n limo python -m dataset_builder.src.visualize_reachability_5labels \
+  --mission-dir /path/to/LIMO_DATASET/<mission_timestamp> \
+  --count 30
+```
+
+默认输出到：
+
+```text
+<mission_timestamp>/reachability_5labels_visualization_30/
+```
+
+也可通过 `--output-dir /path/to/output` 指定位置。已有目录默认拒绝覆盖，确认重画时添加 `--overwrite`。每张图包含 hdr_left/front/right、elevation、五分类状态、risk、geodesic、ignore mask 和类别统计。
