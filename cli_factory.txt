@@ -2,7 +2,7 @@ cd /dfs/data/yangyujie/BEV_LIMO
 source /dfs/data/yangyujie/BEV_LIMO/.venv/bin/activate
 
 
-export REPO=/dfs/data/yangyujie/BEV_LIMO/LIMO
+export REPO=/dfs/data/yangyujie/EXP2/Limo_EXP3
 export CACHE_DIR=$REPO/cache
 mkdir -p $CACHE_DIR  # 确保缓存目录存在
 
@@ -27,7 +27,7 @@ nohup python -m limo.src.train \
     experiment=train_limo_local \
     tags='["LIMO","initial","epoch20","resume"]'\
     dataset.dataset_folder=/dfs/data/limo_dataset \
-    ckpt_path=/dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51/checkpoints/last.ckpt \
+    ckpt_path=.../checkpoints/last.ckpt \
     dataset.num_workers=4 \
-    hydra.run.dir=/dfs/data/yangyujie/BEV_LIMO/LIMO/logs/train/runs/2026-06-26_04-39-51_resume \
+    hydra.run.dir=.../logs/train/runs/2026-06-26_04-39-51_resume \
     > train.out 2>&1 &

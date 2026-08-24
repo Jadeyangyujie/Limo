@@ -1,0 +1,38 @@
+_target_: limo.src.models.relative_structured_model.RelativeStructuredLimoModel
+
+net:
+  _target_: limo.src.models.components.relative_limo_net.RelativeLimoNet
+  dt: 0.1
+  motion_net:
+    _target_: limo.src.models.components.limo_net.LimoNet
+
+loss:
+  _target_: limo.src.models.structured_trajectory_loss.StructuredTrajectoryLoss
+  dt: 0.1
+  xy_weight: 1.0
+  yaw_weight: 0.2
+  motion_weight: 0.5
+  endpoint_weight: 2.0
+  progress_weight: 0.5
+  smooth_weight: 0.1
+  # Loss normalization scales [m/s, m/s, rad/s]. These do not clamp outputs;
+  # in particular, 0.2 m/s is an MPPI sampling scale, not a physical vy bound.
+  motion_scales: [1.0, 0.2, 0.8]
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.OneCycleLR
+  _partial_: true
+  max_lr: 0.0001
+  div_factor: 100
+
+camera_info: "${paths.root_dir}/limo/configs/model/camera_info.yaml"
+compile: false
+
+train_scalar_log_interval: 500
+wandb_num_images: 4
+wandb_train_log_interval: 8000
+wandb_log_worst: true

@@ -1,0 +1,116 @@
+# LiMo relative_structured：factory 服务器运行指令
+# 代码：/dfs/data/yangyujie/EXP2/Limo_EXP3
+# 数据：/dfs/data/limo_dataset
+# 这是分段命令清单，请按编号逐段复制；4A/4B 二选一，不要整文件直接执行。
+
+# -----------------------------------------------------------------------------
+# 1. 每次登录服务器后先初始化环境
+# -----------------------------------------------------------------------------
+cd /dfs/data/yangyujie/BEV_LIMO
+source /dfs/data/yangyujie/BEV_LIMO/.venv/bin/activate
+
+export REPO=/dfs/data/yangyujie/EXP2/Limo_EXP3
+export DATASET=/dfs/data/limo_dataset
+export CUDA_VISIBLE_DEVICES=0
+
+cd "$REPO"
+source scripts/limo_env.sh
+
+# 可选：首次使用在线 W&B 时执行
+# wandb login
+
+# 确认数据目录和本地 DINOv2 权重已经迁移到服务器
+test -d "$DATASET"
+test -d "$TORCH_HOME/hub/facebookresearch_dinov2_main"
+test -f "$TORCH_HOME/hub/checkpoints/dinov2_vits14_pretrain.pth"
+
+
+# -----------------------------------------------------------------------------
+# 2. 迁移后先运行单元测试
+# -----------------------------------------------------------------------------
+pytest -q tests/test_relative_structured.py
+
+
+# -----------------------------------------------------------------------------
+# 3. 先做一次前台 fast_dev_run（真实数据、一个训练 batch）
+#    使用 CSV，避免该检查依赖 W&B 登录。
+# -----------------------------------------------------------------------------
+python -m limo.src.train \
+    experiment=relative_structured_factory \
+    logger=csv \
+    callbacks=none \
+    +trainer.fast_dev_run=true \
+    dataset.batch_size=2 \
+    dataset.num_workers=0 \
+    hydra.run.dir="$REPO/logs/train/relative_structured_factory_fast_dev"
+
+
+# -----------------------------------------------------------------------------
+# 4A. 正式后台训练：W&B 日志
+#     先设置本次运行目录，避免覆盖旧实验。
+# -----------------------------------------------------------------------------
+export RUN_DIR="$REPO/logs/train/relative_structured_factory_run1"
+mkdir -p "$RUN_DIR"
+
+nohup python -m limo.src.train \
+    experiment=relative_structured_factory \
+    hydra.run.dir="$RUN_DIR" \
+    > "$RUN_DIR/train.out" 2>&1 &
+
+echo $! > "$RUN_DIR/train.pid"
+echo "PID=$(cat "$RUN_DIR/train.pid")"
+echo "LOG=$RUN_DIR/train.out"
+
+
+# -----------------------------------------------------------------------------
+# 4B. 若服务器没有 W&B 登录，改用本地 CSV 日志
+#     请修改 RUN_DIR 后再运行；不要与 4A 同时启动。
+# -----------------------------------------------------------------------------
+export RUN_DIR="$REPO/logs/train/relative_structured_factory_csv_run1"
+mkdir -p "$RUN_DIR"
+
+nohup python -m limo.src.train \
+    experiment=relative_structured_factory \
+    logger=csv \
+    hydra.run.dir="$RUN_DIR" \
+    > "$RUN_DIR/train.out" 2>&1 &
+
+echo $! > "$RUN_DIR/train.pid"
+
+
+# -----------------------------------------------------------------------------
+# 5. 查看训练状态
+# -----------------------------------------------------------------------------
+tail -f "$RUN_DIR/train.out"
+# nvidia-smi
+# ls -lh "$RUN_DIR/checkpoints"
+
+
+# -----------------------------------------------------------------------------
+# 6. 从 last.ckpt 断点续训
+#    将 SOURCE_RUN 改成需要恢复的原运行目录；恢复结果写入新目录。
+# -----------------------------------------------------------------------------
+export SOURCE_RUN="$REPO/logs/train/relative_structured_factory_run1"
+export CKPT="$SOURCE_RUN/checkpoints/last.ckpt"
+export RESUME_DIR="${SOURCE_RUN}_resume"
+
+test -f "$CKPT"
+mkdir -p "$RESUME_DIR"
+
+nohup python -m limo.src.train \
+    experiment=relative_structured_factory \
+    ckpt_path="$CKPT" \
+    hydra.run.dir="$RESUME_DIR" \
+    > "$RESUME_DIR/train.out" 2>&1 &
+
+echo $! > "$RESUME_DIR/train.pid"
+
+
+# -----------------------------------------------------------------------------
+# 7. 常用覆盖参数示例（附加到训练命令末尾）
+# -----------------------------------------------------------------------------
+# dataset.batch_size=16          # 显存不足时减小 batch
+# dataset.num_workers=8          # CPU/文件系统负载较高时减小 worker
+# trainer.max_epochs=30          # 修改总 epoch 数
+# trainer.precision=bf16-mixed   # GPU 支持 BF16 时可尝试
+# logger=csv                     # 禁用 W&B，使用本地 CSV

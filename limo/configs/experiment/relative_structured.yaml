@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - override /dataset: limo_local_A6000
+  - override /model: relative_structured
+  - override /logger: csv
+
+tags: ["local", "limo", "D_geo", "relative_structured"]
+
+# Fixed-dt relative dynamics match the 50-step, 5-second MPPI teacher paths.
+dataset:
+  dataset_folder: /home/robot-device/yangyujie/EXP2/LIMO_DATASET
+  dataset_type: geo
+  batch_size: 4
+  num_workers: 4
+  pin_memory: true
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  max_epochs: 20
+  check_val_every_n_epoch: 1
+
+seed: 12345

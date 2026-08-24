@@ -1,0 +1,37 @@
+# @package _global_
+
+defaults:
+  - override /dataset: limo_local_factory
+  - override /model: relative_structured
+  - override /logger: wandb
+
+tags: ["factory", "limo", "D_geo", "relative_structured"]
+
+# The fixed 0.1 s dynamics matches geometric_paths (50 MPPI steps over 5 s).
+# Do not switch this experiment to aug/tel without handling their variable timing.
+dataset:
+  dataset_folder: /dfs/data/limo_dataset
+  missions_csv: ${paths.root_dir}/limo/configs/dataset/missions_split.csv
+  dataset_type: geo
+  batch_size: 32
+  num_workers: 16
+  pin_memory: true
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  max_epochs: 20
+  check_val_every_n_epoch: 1
+
+model:
+  train_scalar_log_interval: 500
+  wandb_num_images: 4
+  wandb_train_log_interval: 8000
+  wandb_log_worst: true
+
+logger:
+  wandb:
+    tags: ${tags}
+
+seed: 12345
